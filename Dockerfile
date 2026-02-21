@@ -2,13 +2,21 @@ FROM node:22-alpine AS frontend-builder
 
 WORKDIR /app/admin-ui
 COPY admin-ui/package.json ./
-RUN npm install -g pnpm && pnpm install
+RUN npm config set registry https://registry.npmmirror.com && \
+    npm install -g pnpm && pnpm install
 COPY admin-ui ./
 RUN pnpm build
 
 FROM rust:1.92-alpine AS builder
 
 RUN apk add --no-cache musl-dev openssl-dev openssl-libs-static
+
+# 配置 cargo 国内镜像（rsproxy.cn）
+RUN mkdir -p /usr/local/cargo/config.d && \
+    echo '[source.crates-io]' > /usr/local/cargo/config.d/mirror.toml && \
+    echo 'replace-with = "rsproxy-sparse"' >> /usr/local/cargo/config.d/mirror.toml && \
+    echo '[source.rsproxy-sparse]' >> /usr/local/cargo/config.d/mirror.toml && \
+    echo 'registry = "sparse+https://rsproxy.cn/crates.io-index/"' >> /usr/local/cargo/config.d/mirror.toml
 
 WORKDIR /app
 COPY Cargo.toml Cargo.lock* ./
