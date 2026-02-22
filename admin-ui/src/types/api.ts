@@ -80,3 +80,29 @@ export interface AddCredentialResponse {
   credentialId: number
   email?: string
 }
+
+// OIDC 认证类型
+export interface AuthStartRequest {
+  mode: 'builder_id' | 'enterprise'
+  startUrl?: string
+  region?: string
+}
+
+export interface AuthStartResponse {
+  authId: string
+  verificationUri: string
+  userCode: string
+  expiresIn: number
+}
+
+export interface AuthStatusResponse {
+  status: 'pending' | 'completed' | 'failed'
+  error?: string
+}
+
+export interface AuthClaimRequest {
+  priority?: number
+  proxyUrl?: string
+  proxyUsername?: string
+  proxyPassword?: string
+}

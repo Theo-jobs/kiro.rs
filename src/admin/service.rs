@@ -9,8 +9,10 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
 use crate::kiro::model::credentials::KiroCredentials;
+use crate::kiro::oidc::{OidcClient, PollResult};
 use crate::kiro::token_manager::MultiTokenManager;
 
+use super::auth_session::{AuthSession, AuthSessionStatus, AuthSessionStore};
 use super::error::AdminServiceError;
 use super::types::{
     AddCredentialRequest, AddCredentialResponse, BalanceResponse, CredentialStatusItem,
@@ -36,10 +38,12 @@ pub struct AdminService {
     token_manager: Arc<MultiTokenManager>,
     balance_cache: Mutex<HashMap<u64, CachedBalance>>,
     cache_path: Option<PathBuf>,
+    auth_sessions: Arc<AuthSessionStore>,
+    oidc_client: Arc<OidcClient>,
 }
 
 impl AdminService {
-    pub fn new(token_manager: Arc<MultiTokenManager>) -> Self {
+    pub fn new(token_manager: Arc<MultiTokenManager>, oidc_client: OidcClient) -> Self {
         let cache_path = token_manager
             .cache_dir()
             .map(|d| d.join("kiro_balance_cache.json"));
@@ -50,6 +54,8 @@ impl AdminService {
             token_manager,
             balance_cache: Mutex::new(balance_cache),
             cache_path,
+            auth_sessions: Arc::new(AuthSessionStore::new()),
+            oidc_client: Arc::new(oidc_client),
         }
     }
 
@@ -246,6 +252,279 @@ impl AdminService {
         Ok(())
     }
 
+    /// 启动 OIDC 认证流程
+    pub async fn start_auth(
+        &self,
+        req: super::types::AuthStartRequest,
+    ) -> Result<super::types::AuthStartResponse, AdminServiceError> {
+        // 清理过期会话
+        self.auth_sessions.cleanup_expired();
+
+        // 验证参数
+        let (region, start_url, issuer_url) = if req.mode == "enterprise" {
+            let start_url = req.start_url.as_deref().unwrap_or("").to_string();
+            // 校验 URL：必须是 https:// 开头且有 host 部分
+            if !start_url.starts_with("https://") || start_url.len() <= "https://".len() {
+                return Err(AdminServiceError::AuthSessionInvalidState(
+                    "企业模式需要有效的 HTTPS 格式 startUrl".to_string(),
+                ));
+            }
+            // 确保 host 部分不为空（https:// 后面至少有一个非 / 字符）
+            let after_scheme = &start_url["https://".len()..];
+            if after_scheme.starts_with('/') || after_scheme.trim().is_empty() {
+                return Err(AdminServiceError::AuthSessionInvalidState(
+                    "startUrl 缺少有效的主机名".to_string(),
+                ));
+            }
+            let region = req.region.as_deref().unwrap_or("").to_string();
+            if !is_valid_aws_region(&region) {
+                return Err(AdminServiceError::AuthSessionInvalidState(
+                    "region 格式无效，应为 us-east-1 等格式".to_string(),
+                ));
+            }
+            (region.clone(), start_url.clone(), Some(start_url))
+        } else {
+            // Builder ID 模式
+            (
+                "us-east-1".to_string(),
+                "https://view.awsapps.com/start".to_string(),
+                None,
+            )
+        };
+
+        // 生成 machine_id
+        let uuid_str = uuid::Uuid::new_v4().to_string().replace('-', "");
+        let machine_id = format!("{}{}", uuid_str, uuid_str);
+
+        // 注册客户端
+        let reg = self
+            .oidc_client
+            .register_client(&region, &machine_id, issuer_url.as_deref())
+            .await
+            .map_err(|e| AdminServiceError::UpstreamError(e.to_string()))?;
+
+        // 设备授权
+        let auth = self
+            .oidc_client
+            .device_authorize(
+                &region,
+                &reg.client_id,
+                &reg.client_secret,
+                &machine_id,
+                &start_url,
+            )
+            .await
+            .map_err(|e| AdminServiceError::UpstreamError(e.to_string()))?;
+
+        // 创建会话
+        let auth_id = uuid::Uuid::new_v4().to_string();
+        let session = AuthSession {
+            id: auth_id.clone(),
+            status: AuthSessionStatus::Pending,
+            created_at: chrono::Utc::now(),
+            region: region.clone(),
+            start_url,
+            machine_id: machine_id.clone(),
+        };
+        self.auth_sessions.insert(session).map_err(|msg| {
+            AdminServiceError::AuthSessionInvalidState(msg.to_string())
+        })?;
+
+        // 后台轮询 task
+        let sessions = self.auth_sessions.clone();
+        let oidc = self.oidc_client.clone();
+        let client_id = reg.client_id.clone();
+        let client_secret = reg.client_secret.clone();
+        let device_code = auth.device_code.clone();
+        let poll_region = region.clone();
+        let poll_machine_id = machine_id.clone();
+        let poll_auth_id = auth_id.clone();
+        let interval = auth.interval.unwrap_or(5).max(5);
+
+        tokio::spawn(async move {
+            let mut current_interval = interval;
+            for _ in 0..120 {
+                tokio::time::sleep(tokio::time::Duration::from_secs(current_interval)).await;
+
+                // 检查会话是否还存在（可能被用户取消）
+                if sessions.get_status(&poll_auth_id).is_none() {
+                    tracing::debug!("OIDC 会话 {} 已被移除，停止轮询", poll_auth_id);
+                    return;
+                }
+
+                match oidc
+                    .poll_token_once(
+                        &poll_region,
+                        &client_id,
+                        &client_secret,
+                        &device_code,
+                        &poll_machine_id,
+                    )
+                    .await
+                {
+                    Ok(PollResult::Pending) => continue,
+                    Ok(PollResult::SlowDown) => {
+                        // RFC 8628: 增加轮询间隔 5 秒
+                        current_interval += 5;
+                        tracing::debug!(
+                            "OIDC 会话 {} 收到 slow_down，间隔增至 {}s",
+                            poll_auth_id,
+                            current_interval
+                        );
+                        continue;
+                    }
+                    Ok(PollResult::Completed(token)) => {
+                        sessions.update_status(
+                            &poll_auth_id,
+                            AuthSessionStatus::Completed {
+                                refresh_token: token.refresh_token,
+                                client_id: client_id.clone(),
+                                client_secret: client_secret.clone(),
+                                region: poll_region.clone(),
+                            },
+                        );
+                        tracing::info!("OIDC 会话 {} 授权完成", poll_auth_id);
+                        return;
+                    }
+                    Ok(PollResult::Failed(msg)) => {
+                        sessions.update_status(
+                            &poll_auth_id,
+                            AuthSessionStatus::Failed(msg.clone()),
+                        );
+                        tracing::warn!("OIDC 会话 {} 授权失败: {}", poll_auth_id, msg);
+                        return;
+                    }
+                    Err(e) => {
+                        tracing::warn!("OIDC 轮询出错: {}", e);
+                        // 网络错误继续重试
+                        continue;
+                    }
+                }
+            }
+
+            // 超时
+            sessions.update_status(
+                &poll_auth_id,
+                AuthSessionStatus::Failed("授权超时".to_string()),
+            );
+        });
+
+        Ok(super::types::AuthStartResponse {
+            auth_id,
+            verification_uri: auth
+                .verification_uri_complete
+                .or(auth.verification_uri)
+                .unwrap_or_default(),
+            user_code: auth.user_code,
+            expires_in: auth.expires_in,
+        })
+    }
+
+    /// 获取认证会话状态
+    pub fn get_auth_status(
+        &self,
+        auth_id: &str,
+    ) -> Result<super::types::AuthStatusResponse, AdminServiceError> {
+        match self.auth_sessions.get_status(auth_id) {
+            Some(AuthSessionStatus::Pending) => Ok(super::types::AuthStatusResponse {
+                status: "pending".to_string(),
+                error: None,
+            }),
+            Some(AuthSessionStatus::Completed { .. }) => Ok(super::types::AuthStatusResponse {
+                status: "completed".to_string(),
+                error: None,
+            }),
+            Some(AuthSessionStatus::Failed(msg)) => Ok(super::types::AuthStatusResponse {
+                status: "failed".to_string(),
+                error: Some(msg),
+            }),
+            None => Err(AdminServiceError::AuthSessionNotFound(
+                auth_id.to_string(),
+            )),
+        }
+    }
+
+    /// 领取认证结果，创建凭据（原子操作：先 remove 再处理，防止重复 claim）
+    pub async fn claim_auth(
+        &self,
+        auth_id: &str,
+        req: super::types::AuthClaimRequest,
+    ) -> Result<AddCredentialResponse, AdminServiceError> {
+        // 原子移除：防止并发 claim 竞态
+        let session = self
+            .auth_sessions
+            .remove(auth_id)
+            .ok_or_else(|| AdminServiceError::AuthSessionNotFound(auth_id.to_string()))?;
+
+        let (refresh_token, client_id, client_secret, region) = match &session.status {
+            AuthSessionStatus::Completed {
+                refresh_token,
+                client_id,
+                client_secret,
+                region,
+            } => (
+                refresh_token.clone(),
+                client_id.clone(),
+                client_secret.clone(),
+                region.clone(),
+            ),
+            AuthSessionStatus::Pending => {
+                // 放回会话，因为还没完成
+                let _ = self.auth_sessions.insert(session);
+                return Err(AdminServiceError::AuthSessionInvalidState(
+                    "认证尚未完成".to_string(),
+                ));
+            }
+            AuthSessionStatus::Failed(msg) => {
+                return Err(AdminServiceError::AuthSessionInvalidState(
+                    format!("认证已失败: {}", msg),
+                ));
+            }
+        };
+
+        // 构建凭据
+        let new_cred = KiroCredentials {
+            id: None,
+            access_token: None,
+            refresh_token: Some(refresh_token),
+            profile_arn: None,
+            expires_at: None,
+            auth_method: Some("idc".to_string()),
+            client_id: Some(client_id),
+            client_secret: Some(client_secret),
+            priority: req.priority,
+            region: Some(region.clone()),
+            auth_region: Some(region.clone()),
+            api_region: Some(region),
+            machine_id: Some(session.machine_id.clone()),
+            email: None,
+            subscription_title: None,
+            proxy_url: req.proxy_url,
+            proxy_username: req.proxy_username,
+            proxy_password: req.proxy_password,
+            disabled: false,
+        };
+
+        // 添加凭据
+        let credential_id = self
+            .token_manager
+            .add_credential(new_cred)
+            .await
+            .map_err(|e| self.classify_add_error(e))?;
+
+        // 主动获取订阅等级
+        if let Err(e) = self.token_manager.get_usage_limits_for(credential_id).await {
+            tracing::warn!("OIDC 添加凭据后获取订阅等级失败: {}", e);
+        }
+
+        Ok(AddCredentialResponse {
+            success: true,
+            message: format!("OIDC 凭据添加成功，ID: {}", credential_id),
+            credential_id,
+            email: None,
+        })
+    }
+
     /// 获取负载均衡模式
     pub fn get_load_balancing_mode(&self) -> LoadBalancingModeResponse {
         LoadBalancingModeResponse {
@@ -411,4 +690,21 @@ impl AdminService {
             AdminServiceError::InternalError(msg)
         }
     }
+}
+
+/// AWS region 格式验证（如 us-east-1, ap-southeast-1, us-gov-west-1）
+fn is_valid_aws_region(region: &str) -> bool {
+    let parts: Vec<&str> = region.split('-').collect();
+    if parts.len() < 3 {
+        return false;
+    }
+    // 最后一部分必须是数字
+    let last = parts.last().unwrap();
+    if last.is_empty() || !last.chars().all(|c| c.is_ascii_digit()) {
+        return false;
+    }
+    // 其余部分必须是小写字母
+    parts[..parts.len() - 1]
+        .iter()
+        .all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_lowercase()))
 }

@@ -237,3 +237,47 @@ impl AdminErrorResponse {
         Self::new("internal_error", message)
     }
 }
+
+// ============ OIDC 认证 ============
+
+/// OIDC 认证启动请求
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthStartRequest {
+    /// 模式: "builder_id" 或 "enterprise"
+    pub mode: String,
+    /// 企业 SSO 起始 URL（企业模式必填）
+    pub start_url: Option<String>,
+    /// AWS Region（企业模式必填）
+    pub region: Option<String>,
+}
+
+/// OIDC 认证启动响应
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthStartResponse {
+    pub auth_id: String,
+    pub verification_uri: String,
+    pub user_code: String,
+    pub expires_in: u64,
+}
+
+/// OIDC 认证状态响应
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthStatusResponse {
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// OIDC 认证领取请求
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthClaimRequest {
+    #[serde(default)]
+    pub priority: u32,
+    pub proxy_url: Option<String>,
+    pub proxy_username: Option<String>,
+    pub proxy_password: Option<String>,
+}

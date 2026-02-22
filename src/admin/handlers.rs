@@ -9,7 +9,8 @@ use axum::{
 use super::{
     middleware::AdminState,
     types::{
-        AddCredentialRequest, SetDisabledRequest, SetLoadBalancingModeRequest, SetPriorityRequest,
+        AddCredentialRequest, AuthClaimRequest, AuthStartRequest,
+        SetDisabledRequest, SetLoadBalancingModeRequest, SetPriorityRequest,
         SuccessResponse,
     },
 };
@@ -120,6 +121,43 @@ pub async fn set_load_balancing_mode(
     Json(payload): Json<SetLoadBalancingModeRequest>,
 ) -> impl IntoResponse {
     match state.service.set_load_balancing_mode(payload) {
+        Ok(response) => Json(response).into_response(),
+        Err(e) => (e.status_code(), Json(e.into_response())).into_response(),
+    }
+}
+
+/// POST /api/admin/auth/start
+/// 启动 OIDC 认证流程
+pub async fn start_auth(
+    State(state): State<AdminState>,
+    Json(payload): Json<AuthStartRequest>,
+) -> impl IntoResponse {
+    match state.service.start_auth(payload).await {
+        Ok(response) => Json(response).into_response(),
+        Err(e) => (e.status_code(), Json(e.into_response())).into_response(),
+    }
+}
+
+/// GET /api/admin/auth/status/{id}
+/// 获取认证会话状态
+pub async fn get_auth_status(
+    State(state): State<AdminState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    match state.service.get_auth_status(&id) {
+        Ok(response) => Json(response).into_response(),
+        Err(e) => (e.status_code(), Json(e.into_response())).into_response(),
+    }
+}
+
+/// POST /api/admin/auth/claim/{id}
+/// 领取认证结果
+pub async fn claim_auth(
+    State(state): State<AdminState>,
+    Path(id): Path<String>,
+    Json(payload): Json<AuthClaimRequest>,
+) -> impl IntoResponse {
+    match state.service.claim_auth(&id, payload).await {
         Ok(response) => Json(response).into_response(),
         Err(e) => (e.status_code(), Json(e.into_response())).into_response(),
     }

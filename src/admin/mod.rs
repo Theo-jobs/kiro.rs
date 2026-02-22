@@ -16,6 +16,7 @@
 //! let admin_router = create_admin_router(admin_state);
 //! ```
 
+mod auth_session;
 mod error;
 mod handlers;
 mod middleware;

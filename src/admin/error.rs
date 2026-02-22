@@ -20,6 +20,12 @@ pub enum AdminServiceError {
 
     /// 凭据无效（验证失败）
     InvalidCredential(String),
+
+    /// 认证会话不存在
+    AuthSessionNotFound(String),
+
+    /// 认证会话状态无效
+    AuthSessionInvalidState(String),
 }
 
 impl fmt::Display for AdminServiceError {
@@ -31,6 +37,12 @@ impl fmt::Display for AdminServiceError {
             AdminServiceError::UpstreamError(msg) => write!(f, "上游服务错误: {}", msg),
             AdminServiceError::InternalError(msg) => write!(f, "内部错误: {}", msg),
             AdminServiceError::InvalidCredential(msg) => write!(f, "凭据无效: {}", msg),
+            AdminServiceError::AuthSessionNotFound(msg) => {
+                write!(f, "认证会话不存在: {}", msg)
+            }
+            AdminServiceError::AuthSessionInvalidState(msg) => {
+                write!(f, "认证会话状态无效: {}", msg)
+            }
         }
     }
 }
@@ -45,6 +57,8 @@ impl AdminServiceError {
             AdminServiceError::UpstreamError(_) => StatusCode::BAD_GATEWAY,
             AdminServiceError::InternalError(_) => StatusCode::INTERNAL_SERVER_ERROR,
             AdminServiceError::InvalidCredential(_) => StatusCode::BAD_REQUEST,
+            AdminServiceError::AuthSessionNotFound(_) => StatusCode::NOT_FOUND,
+            AdminServiceError::AuthSessionInvalidState(_) => StatusCode::BAD_REQUEST,
         }
     }
 
@@ -57,6 +71,12 @@ impl AdminServiceError {
                 AdminErrorResponse::internal_error(self.to_string())
             }
             AdminServiceError::InvalidCredential(_) => {
+                AdminErrorResponse::invalid_request(self.to_string())
+            }
+            AdminServiceError::AuthSessionNotFound(_) => {
+                AdminErrorResponse::not_found(self.to_string())
+            }
+            AdminServiceError::AuthSessionInvalidState(_) => {
                 AdminErrorResponse::invalid_request(self.to_string())
             }
         }

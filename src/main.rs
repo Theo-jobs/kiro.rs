@@ -97,7 +97,7 @@ async fn main() {
         api_url: config.count_tokens_api_url.clone(),
         api_key: config.count_tokens_api_key.clone(),
         auth_type: config.count_tokens_auth_type.clone(),
-        proxy: proxy_config,
+        proxy: proxy_config.clone(),
         tls_backend: config.tls_backend,
     });
 
@@ -121,7 +121,13 @@ async fn main() {
             tracing::warn!("admin_api_key 配置为空，Admin API 未启用");
             anthropic_app
         } else {
-            let admin_service = admin::AdminService::new(token_manager.clone());
+            let http_client = http_client::build_client(proxy_config.as_ref(), 30, config.tls_backend)
+                .unwrap_or_else(|e| {
+                    tracing::error!("创建 OIDC HTTP 客户端失败: {}", e);
+                    std::process::exit(1);
+                });
+            let oidc_client = kiro::oidc::OidcClient::new(http_client, &config.kiro_version);
+            let admin_service = admin::AdminService::new(token_manager.clone(), oidc_client);
             let admin_state = admin::AdminState::new(admin_key, admin_service);
             let admin_app = admin::create_admin_router(admin_state);
 

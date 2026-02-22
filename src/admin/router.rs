@@ -7,9 +7,10 @@ use axum::{
 
 use super::{
     handlers::{
-        add_credential, delete_credential, get_all_credentials, get_credential_balance,
-        get_load_balancing_mode, reset_failure_count, set_credential_disabled,
-        set_credential_priority, set_load_balancing_mode,
+        add_credential, claim_auth, delete_credential, get_all_credentials,
+        get_auth_status, get_credential_balance, get_load_balancing_mode,
+        reset_failure_count, set_credential_disabled, set_credential_priority,
+        set_load_balancing_mode, start_auth,
     },
     middleware::{AdminState, admin_auth_middleware},
 };
@@ -42,6 +43,9 @@ pub fn create_admin_router(state: AdminState) -> Router {
         .route("/credentials/{id}/priority", post(set_credential_priority))
         .route("/credentials/{id}/reset", post(reset_failure_count))
         .route("/credentials/{id}/balance", get(get_credential_balance))
+        .route("/auth/start", post(start_auth))
+        .route("/auth/status/{id}", get(get_auth_status))
+        .route("/auth/claim/{id}", post(claim_auth))
         .route(
             "/config/load-balancing",
             get(get_load_balancing_mode).put(set_load_balancing_mode),

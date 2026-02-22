@@ -8,6 +8,10 @@ import type {
   SetPriorityRequest,
   AddCredentialRequest,
   AddCredentialResponse,
+  AuthStartRequest,
+  AuthStartResponse,
+  AuthStatusResponse,
+  AuthClaimRequest,
 } from '@/types/api'
 
 // 创建 axios 实例
@@ -94,5 +98,21 @@ export async function getLoadBalancingMode(): Promise<{ mode: 'priority' | 'bala
 // 设置负载均衡模式
 export async function setLoadBalancingMode(mode: 'priority' | 'balanced'): Promise<{ mode: 'priority' | 'balanced' }> {
   const { data } = await api.put<{ mode: 'priority' | 'balanced' }>('/config/load-balancing', { mode })
+  return data
+}
+
+// OIDC 认证 API
+export async function startAuth(req: AuthStartRequest): Promise<AuthStartResponse> {
+  const { data } = await api.post<AuthStartResponse>('/auth/start', req)
+  return data
+}
+
+export async function getAuthStatus(authId: string): Promise<AuthStatusResponse> {
+  const { data } = await api.get<AuthStatusResponse>(`/auth/status/${encodeURIComponent(authId)}`)
+  return data
+}
+
+export async function claimAuth(authId: string, req: AuthClaimRequest): Promise<AddCredentialResponse> {
+  const { data } = await api.post<AddCredentialResponse>(`/auth/claim/${encodeURIComponent(authId)}`, req)
   return data
 }
