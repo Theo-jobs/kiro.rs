@@ -176,6 +176,13 @@ impl AdminService {
             0.0
         };
 
+        // 提取有效时间（freeTrialExpiry）
+        let token_expiry = usage
+            .usage_breakdown_list
+            .first()
+            .and_then(|b| b.free_trial_info.as_ref())
+            .and_then(|info| info.free_trial_expiry);
+
         Ok(BalanceResponse {
             id,
             subscription_title: usage.subscription_title().map(|s| s.to_string()),
@@ -184,6 +191,7 @@ impl AdminService {
             remaining,
             usage_percentage,
             next_reset_at: usage.next_date_reset,
+            token_expiry,
         })
     }
 

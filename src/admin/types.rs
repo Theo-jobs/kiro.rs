@@ -156,6 +156,8 @@ pub struct BalanceResponse {
     pub usage_percentage: f64,
     /// 下次重置时间（Unix 时间戳）
     pub next_reset_at: Option<f64>,
+    /// 有效时间（Unix 时间戳，来自 freeTrialExpiry）
+    pub token_expiry: Option<f64>,
 }
 
 // ============ 负载均衡配置 ============

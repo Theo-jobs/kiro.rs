@@ -33,6 +33,7 @@ export interface BalanceResponse {
   remaining: number
   usagePercentage: number
   nextResetAt: number | null
+  tokenExpiry: number | null
 }
 
 // 成功响应

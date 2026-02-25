@@ -242,6 +242,14 @@ export function CredentialCard({
                 <span className="text-sm text-muted-foreground ml-1">未知</span>
               )}
             </div>
+            {balance?.tokenExpiry != null && (
+              <div className="col-span-2">
+                <span className="text-muted-foreground">有效时间：</span>
+                <span className="font-medium ml-1">
+                  {new Date(balance.tokenExpiry * 1000).toLocaleString('zh-CN')}
+                </span>
+              </div>
+            )}
             {credential.hasProxy && (
               <div className="col-span-2">
                 <span className="text-muted-foreground">代理：</span>

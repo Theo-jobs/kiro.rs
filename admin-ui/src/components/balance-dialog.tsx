@@ -95,6 +95,12 @@ export function BalanceDialog({ credentialId, open, onOpenChange }: BalanceDialo
                   {formatDate(balance.nextResetAt)}
                 </span>
               </div>
+              <div>
+                <span className="text-muted-foreground">有效时间：</span>
+                <span className="font-medium">
+                  {balance.tokenExpiry ? formatDate(balance.tokenExpiry) : '永久'}
+                </span>
+              </div>
             </div>
           </div>
         )}
