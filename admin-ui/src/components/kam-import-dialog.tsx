@@ -53,6 +53,32 @@ async function sha256Hex(value: string): Promise<string> {
   return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('')
 }
 
+// 将扁平格式（refreshToken 在顶层）转换为嵌套的 KamAccount 结构
+function normalizeFlatAccount(item: unknown): unknown {
+  if (typeof item !== 'object' || item === null) return item
+  const obj = item as Record<string, unknown>
+  // 已经是嵌套格式，不处理
+  if (typeof obj.credentials === 'object' && obj.credentials !== null) return item
+  // 扁平格式：顶层有 refreshToken
+  if (typeof obj.refreshToken === 'string') {
+    return {
+      email: obj.email,
+      nickname: obj.nickname,
+      userId: obj.userId,
+      machineId: obj.machineId,
+      status: obj.status,
+      credentials: {
+        refreshToken: obj.refreshToken,
+        clientId: obj.clientId,
+        clientSecret: obj.clientSecret,
+        region: obj.region,
+        authMethod: obj.provider === 'BuilderId' ? 'idc' : obj.authMethod,
+      },
+    }
+  }
+  return item
+}
+
 // 校验元素是否为有效的 KAM 账号结构
 function isValidKamAccount(item: unknown): item is KamAccount {
   if (typeof item !== 'object' || item === null) return false
@@ -76,22 +102,27 @@ function parseKamJson(raw: string): KamAccount[] {
   else if (Array.isArray(parsed)) {
     rawItems = parsed
   }
-  // 单个账号对象（有 credentials 字段）
-  else if (parsed.credentials && typeof parsed.credentials === 'object') {
+  // 单个账号对象（有 credentials 字段或顶层 refreshToken）
+  else if (
+    (parsed.credentials && typeof parsed.credentials === 'object') ||
+    typeof parsed.refreshToken === 'string'
+  ) {
     rawItems = [parsed]
   }
   else {
     throw new Error('无法识别的 KAM JSON 格式')
   }
 
-  const validAccounts = rawItems.filter(isValidKamAccount)
+  // 将扁平格式（顶层 refreshToken）转换为嵌套 credentials 结构
+  const normalizedItems = rawItems.map(normalizeFlatAccount)
+  const validAccounts = normalizedItems.filter(isValidKamAccount)
 
-  if (rawItems.length > 0 && validAccounts.length === 0) {
-    throw new Error(`共 ${rawItems.length} 条记录，但均缺少有效的 credentials.refreshToken`)
+  if (normalizedItems.length > 0 && validAccounts.length === 0) {
+    throw new Error(`共 ${normalizedItems.length} 条记录，但均缺少有效的 credentials.refreshToken`)
   }
 
-  if (validAccounts.length < rawItems.length) {
-    const skipped = rawItems.length - validAccounts.length
+  if (validAccounts.length < normalizedItems.length) {
+    const skipped = normalizedItems.length - validAccounts.length
     console.warn(`KAM 导入：跳过 ${skipped} 条缺少有效 credentials.refreshToken 的记录`)
   }
 
@@ -366,7 +397,7 @@ export function KamImportDialog({ open, onOpenChange }: KamImportDialogProps) {
           <div className="space-y-2">
             <label className="text-sm font-medium">KAM 导出 JSON</label>
             <textarea
-              placeholder={'粘贴 Kiro Account Manager 导出的 JSON，格式如下：\n{\n  "version": "1.5.0",\n  "accounts": [\n    {\n      "email": "...",\n      "credentials": {\n        "refreshToken": "...",\n        "clientId": "...",\n        "clientSecret": "...",\n        "region": "us-east-1"\n      }\n    }\n  ]\n}'}
+              placeholder={'粘贴 KAM 导出 JSON 或 claude-api 格式，支持：\n\n1. KAM 格式：{ "accounts": [{ "credentials": { "refreshToken": "..." } }] }\n2. 扁平格式：[{ "refreshToken": "...", "clientId": "...", "clientSecret": "..." }]'}
               value={jsonInput}
               onChange={(e) => setJsonInput(e.target.value)}
               disabled={importing}
