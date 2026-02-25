@@ -19,8 +19,8 @@ use super::types::{
     CredentialsStatusResponse, LoadBalancingModeResponse, SetLoadBalancingModeRequest,
 };
 
-/// 余额缓存过期时间（秒），5 分钟
-const BALANCE_CACHE_TTL_SECS: i64 = 300;
+/// 余额缓存过期时间（秒），10 分钟
+const BALANCE_CACHE_TTL_SECS: i64 = 600;
 
 /// 缓存的余额条目（含时间戳）
 #[derive(Debug, Clone, Serialize, Deserialize)]
