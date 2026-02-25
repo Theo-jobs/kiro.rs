@@ -12,6 +12,7 @@ use tokio::sync::Mutex as TokioMutex;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration as StdDuration, Instant};
 
@@ -486,8 +487,9 @@ pub struct MultiTokenManager {
     entries: Mutex<Vec<CredentialEntry>>,
     /// 当前活动凭据 ID
     current_id: Mutex<u64>,
-    /// Token 刷新锁，确保同一时间只有一个刷新操作
-    refresh_lock: TokioMutex<()>,
+    /// Per-credential Token 刷新锁，确保同一凭据同一时间只有一个刷新操作
+    /// 不同凭据的刷新互不阻塞
+    refresh_locks: Mutex<HashMap<u64, Arc<TokioMutex<()>>>>,
     /// 凭据文件路径（用于回写）
     credentials_path: Option<PathBuf>,
     /// 是否为多凭据格式（数组格式才回写）
@@ -602,7 +604,7 @@ impl MultiTokenManager {
             proxy,
             entries: Mutex::new(entries),
             current_id: Mutex::new(initial_id),
-            refresh_lock: TokioMutex::new(()),
+            refresh_locks: Mutex::new(HashMap::new()),
             credentials_path,
             is_multiple_format,
             load_balancing_mode: Mutex::new(load_balancing_mode),
@@ -623,6 +625,15 @@ impl MultiTokenManager {
         manager.load_stats();
 
         Ok(manager)
+    }
+
+    /// 获取指定凭据的刷新锁（按需创建）
+    fn get_refresh_lock(&self, id: u64) -> Arc<TokioMutex<()>> {
+        let mut locks = self.refresh_locks.lock();
+        locks
+            .entry(id)
+            .or_insert_with(|| Arc::new(TokioMutex::new(())))
+            .clone()
     }
 
     /// 获取配置的引用
@@ -866,8 +877,9 @@ impl MultiTokenManager {
         let needs_refresh = is_token_expired(credentials) || is_token_expiring_soon(credentials);
 
         let creds = if needs_refresh {
-            // 获取刷新锁，确保同一时间只有一个刷新操作
-            let _guard = self.refresh_lock.lock().await;
+            // 获取 per-credential 刷新锁，不同凭据的刷新互不阻塞
+            let lock = self.get_refresh_lock(id);
+            let _guard = lock.lock().await;
 
             // 第二次检查：获取锁后重新读取凭据，因为其他请求可能已经完成刷新
             let current_creds = {
@@ -1357,7 +1369,8 @@ impl MultiTokenManager {
         let needs_refresh = is_token_expired(&credentials) || is_token_expiring_soon(&credentials);
 
         let token = if needs_refresh {
-            let _guard = self.refresh_lock.lock().await;
+            let lock = self.get_refresh_lock(id);
+            let _guard = lock.lock().await;
             let current_creds = {
                 let entries = self.entries.lock();
                 entries
@@ -1590,6 +1603,12 @@ impl MultiTokenManager {
 
         // 持久化更改
         self.persist_credentials()?;
+
+        // 清理已删除凭据的刷新锁
+        {
+            let mut locks = self.refresh_locks.lock();
+            locks.remove(&id);
+        }
 
         // 立即回写统计数据，清除已删除凭据的残留条目
         self.save_stats();
