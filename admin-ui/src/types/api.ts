@@ -22,6 +22,7 @@ export interface CredentialStatusItem {
   lastUsedAt: string | null
   hasProxy: boolean
   proxyUrl?: string
+  cachedBalance?: BalanceResponse
 }
 
 // 余额响应
@@ -34,6 +35,7 @@ export interface BalanceResponse {
   usagePercentage: number
   nextResetAt: number | null
   tokenExpiry: number | null
+  cachedAt?: number
 }
 
 // 成功响应
