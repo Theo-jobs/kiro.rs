@@ -1,0 +1,22 @@
+services:
+  kiro-rs:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: kiro-rs:latest
+    container_name: kiro-rs
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "8990:8990"
+    volumes:
+      - ./config:/app/config
+    environment:
+      - TZ=Asia/Shanghai
+      - RUST_LOG=info
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
