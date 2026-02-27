@@ -16,7 +16,7 @@ import { EnterpriseLoginDialog } from '@/components/enterprise-login-dialog'
 import { useCredentials, useDeleteCredential, useResetFailure, useLoadBalancingMode, useSetLoadBalancingMode } from '@/hooks/use-credentials'
 import { getCredentialBalance } from '@/api/credentials'
 import { extractErrorMessage } from '@/lib/utils'
-import type { BalanceResponse } from '@/types/api'
+import type { BalanceResponse, CredentialStatusItem } from '@/types/api'
 
 interface DashboardProps {
   onLogout: () => void
@@ -55,12 +55,27 @@ export function Dashboard({ onLogout }: DashboardProps) {
   const { data: loadBalancingData, isLoading: isLoadingMode } = useLoadBalancingMode()
   const { mutate: setLoadBalancingMode, isPending: isSettingMode } = useSetLoadBalancingMode()
 
+  // 按订阅类型排序：Power > Pro > 其他 > 未知，同级按 priority 排序
+  const getSubscriptionRank = (credential: CredentialStatusItem): number => {
+    const title = (credential.cachedBalance?.subscriptionTitle || balanceMap.get(credential.id)?.subscriptionTitle || '').toLowerCase()
+    if (title.includes('power')) return 0
+    if (title.includes('pro')) return 1
+    if (title) return 2
+    return 3
+  }
+
+  const sortedCredentials = [...(data?.credentials || [])].sort((a, b) => {
+    const rankDiff = getSubscriptionRank(a) - getSubscriptionRank(b)
+    if (rankDiff !== 0) return rankDiff
+    return a.priority - b.priority
+  })
+
   // 计算分页
-  const totalPages = Math.ceil((data?.credentials.length || 0) / itemsPerPage)
+  const totalPages = Math.ceil((sortedCredentials.length || 0) / itemsPerPage)
   const startIndex = (currentPage - 1) * itemsPerPage
   const endIndex = startIndex + itemsPerPage
-  const currentCredentials = data?.credentials.slice(startIndex, endIndex) || []
-  const disabledCredentialCount = data?.credentials.filter(credential => credential.disabled).length || 0
+  const currentCredentials = sortedCredentials.slice(startIndex, endIndex)
+  const disabledCredentialCount = sortedCredentials.filter(credential => credential.disabled).length
   const selectedDisabledCount = Array.from(selectedIds).filter(id => {
     const credential = data?.credentials.find(c => c.id === id)
     return Boolean(credential?.disabled)
