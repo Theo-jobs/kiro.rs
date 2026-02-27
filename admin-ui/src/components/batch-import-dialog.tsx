@@ -11,7 +11,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { useCredentials, useAddCredential, useDeleteCredential } from '@/hooks/use-credentials'
 import { getCredentialBalance, setCredentialDisabled } from '@/api/credentials'
-import { extractErrorMessage } from '@/lib/utils'
+import { extractErrorMessage, sha256Hex } from '@/lib/utils'
 
 interface BatchImportDialogProps {
   open: boolean
@@ -84,22 +84,8 @@ interface VerificationResult {
   rollbackError?: string
 }
 
-async function sha256Hex(value: string): Promise<string> {
-  // crypto.subtle 仅在 HTTPS / localhost 下可用，HTTP 环境回退为简单 hash
-  if (typeof crypto !== 'undefined' && crypto.subtle) {
-    const encoded = new TextEncoder().encode(value)
-    const digest = await crypto.subtle.digest('SHA-256', encoded)
-    const bytes = new Uint8Array(digest)
-    return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('')
-  }
-  // 回退：FNV-1a 32-bit hash（仅用于去重，非安全用途）
-  let hash = 0x811c9dc5
-  for (let i = 0; i < value.length; i++) {
-    hash ^= value.charCodeAt(i)
-    hash = Math.imul(hash, 0x01000193)
-  }
-  return (hash >>> 0).toString(16).padStart(8, '0')
-}
+
+
 
 export function BatchImportDialog({ open, onOpenChange }: BatchImportDialogProps) {
   const [jsonInput, setJsonInput] = useState('')
@@ -141,25 +127,30 @@ export function BatchImportDialog({ open, onOpenChange }: BatchImportDialogProps
   }
 
   const handleBatchImport = async () => {
+    // 先单独解析 JSON，给出精准的错误提示
+    let credentials: CredentialInput[]
     try {
-      // 1. 解析 JSON
       const parsed = JSON.parse(jsonInput)
       const rawItems: unknown[] = Array.isArray(parsed) ? parsed : [parsed]
 
       // 2. 自动检测格式并转换
-      let credentials: CredentialInput[]
       if (rawItems.length > 0 && isClaudeApiFormat(rawItems[0])) {
         credentials = convertClaudeApiCredentials(rawItems)
         toast.info(`检测到 claude-api 格式，已自动转换 ${credentials.length} 个凭据`)
       } else {
         credentials = rawItems as unknown as CredentialInput[]
       }
+    } catch (error) {
+      toast.error('JSON 格式错误: ' + extractErrorMessage(error))
+      return
+    }
 
-      if (credentials.length === 0) {
-        toast.error('没有可导入的凭据')
-        return
-      }
+    if (credentials.length === 0) {
+      toast.error('没有可导入的凭据')
+      return
+    }
 
+    try {
       setImporting(true)
       setProgress({ current: 0, total: credentials.length })
 
@@ -354,7 +345,7 @@ export function BatchImportDialog({ open, onOpenChange }: BatchImportDialogProps
         }
       }
     } catch (error) {
-      toast.error('JSON 格式错误: ' + extractErrorMessage(error))
+      toast.error('导入失败: ' + extractErrorMessage(error))
     } finally {
       setImporting(false)
     }
