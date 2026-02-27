@@ -62,25 +62,36 @@ impl AdminService {
     /// 获取所有凭据状态
     pub fn get_all_credentials(&self) -> CredentialsStatusResponse {
         let snapshot = self.token_manager.snapshot();
+        let cache = self.balance_cache.lock();
 
         let mut credentials: Vec<CredentialStatusItem> = snapshot
             .entries
             .into_iter()
-            .map(|entry| CredentialStatusItem {
-                id: entry.id,
-                priority: entry.priority,
-                disabled: entry.disabled,
-                failure_count: entry.failure_count,
-                is_current: entry.id == snapshot.current_id,
-                expires_at: entry.expires_at,
-                auth_method: entry.auth_method,
-                has_profile_arn: entry.has_profile_arn,
-                refresh_token_hash: entry.refresh_token_hash,
-                email: entry.email,
-                success_count: entry.success_count,
-                last_used_at: entry.last_used_at.clone(),
-                has_proxy: entry.has_proxy,
-                proxy_url: entry.proxy_url,
+            .map(|entry| {
+                // 从缓存中查找对应的余额数据
+                let cached_balance = cache.get(&entry.id).map(|cached| {
+                    let mut balance = cached.data.clone();
+                    balance.cached_at = Some(cached.cached_at);
+                    balance
+                });
+
+                CredentialStatusItem {
+                    id: entry.id,
+                    priority: entry.priority,
+                    disabled: entry.disabled,
+                    failure_count: entry.failure_count,
+                    is_current: entry.id == snapshot.current_id,
+                    expires_at: entry.expires_at,
+                    auth_method: entry.auth_method,
+                    has_profile_arn: entry.has_profile_arn,
+                    refresh_token_hash: entry.refresh_token_hash,
+                    email: entry.email,
+                    success_count: entry.success_count,
+                    last_used_at: entry.last_used_at.clone(),
+                    has_proxy: entry.has_proxy,
+                    proxy_url: entry.proxy_url,
+                    cached_balance,
+                }
             })
             .collect();
 
@@ -192,6 +203,7 @@ impl AdminService {
             usage_percentage,
             next_reset_at: usage.next_date_reset,
             token_expiry,
+            cached_at: None, // fetch_balance 不填充 cached_at，由 get_balance 填充
         })
     }
 

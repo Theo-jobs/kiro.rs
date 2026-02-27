@@ -51,6 +51,9 @@ pub struct CredentialStatusItem {
     /// 代理 URL（用于前端展示）
     #[serde(skip_serializing_if = "Option::is_none")]
     pub proxy_url: Option<String>,
+    /// 已缓存的余额数据（如果存在）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cached_balance: Option<BalanceResponse>,
 }
 
 // ============ 操作请求 ============
@@ -158,6 +161,9 @@ pub struct BalanceResponse {
     pub next_reset_at: Option<f64>,
     /// 有效时间（Unix 时间戳，来自 freeTrialExpiry）
     pub token_expiry: Option<f64>,
+    /// 缓存时间（Unix 时间戳）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cached_at: Option<f64>,
 }
 
 // ============ 负载均衡配置 ============

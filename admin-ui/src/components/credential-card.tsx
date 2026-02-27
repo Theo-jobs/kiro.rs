@@ -48,6 +48,21 @@ function formatLastUsed(lastUsedAt: string | null): string {
   return `${days} 天前`
 }
 
+function formatCachedTime(cachedAt: number | undefined): string | null {
+  if (!cachedAt) return null
+  const now = Date.now() / 1000
+  const diff = now - cachedAt
+  if (diff < 0) return null
+  const seconds = Math.floor(diff)
+  if (seconds < 60) return `${seconds} 秒前缓存`
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `${minutes} 分钟前缓存`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours} 小时前缓存`
+  const days = Math.floor(hours / 24)
+  return `${days} 天前缓存`
+}
+
 export function CredentialCard({
   credential,
   onViewBalance,
@@ -237,6 +252,11 @@ export function CredentialCard({
                   <span className="text-xs text-muted-foreground ml-1">
                     ({(100 - balance.usagePercentage).toFixed(1)}% 剩余)
                   </span>
+                  {balance.cachedAt && (
+                    <span className="text-xs text-muted-foreground ml-2">
+                      ({formatCachedTime(balance.cachedAt)})
+                    </span>
+                  )}
                 </span>
               ) : (
                 <span className="text-sm text-muted-foreground ml-1">未知</span>

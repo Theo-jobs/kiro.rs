@@ -105,6 +105,26 @@ export function Dashboard({ onLogout }: DashboardProps) {
     })
   }, [data?.credentials])
 
+  // 从后端缓存初始化 balanceMap（仅填充尚未存在的条目）
+  useEffect(() => {
+    if (!data?.credentials) return
+
+    setBalanceMap(prev => {
+      const next = new Map(prev)
+      let updated = false
+
+      data.credentials.forEach(credential => {
+        // 仅当前端没有该凭据的余额数据，且后端有缓存时才填充
+        if (!next.has(credential.id) && credential.cachedBalance) {
+          next.set(credential.id, credential.cachedBalance)
+          updated = true
+        }
+      })
+
+      return updated ? next : prev
+    })
+  }, [data?.credentials])
+
   const toggleDarkMode = () => {
     setDarkMode(!darkMode)
     document.documentElement.classList.toggle('dark')
