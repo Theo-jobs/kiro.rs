@@ -115,3 +115,16 @@ export interface AuthClaimRequest {
   proxyUsername?: string
   proxyPassword?: string
 }
+
+// 全局代理配置
+export interface GlobalProxyResponse {
+  proxyUrl: string | null
+  proxyUsername: string | null
+  hasProxyPassword: boolean
+}
+
+export interface UpdateGlobalProxyRequest {
+  proxyUrl?: string | null
+  proxyUsername?: string | null
+  proxyPassword?: string | null
+}

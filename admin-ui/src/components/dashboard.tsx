@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { RefreshCw, LogOut, Moon, Sun, Server, Plus, Upload, FileUp, Trash2, RotateCcw, CheckCircle2, LogIn } from 'lucide-react'
+import { RefreshCw, LogOut, Moon, Sun, Server, Plus, Upload, FileUp, Trash2, RotateCcw, CheckCircle2, LogIn, Globe } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { storage } from '@/lib/storage'
@@ -13,6 +13,7 @@ import { BatchImportDialog } from '@/components/batch-import-dialog'
 import { KamImportDialog } from '@/components/kam-import-dialog'
 import { BatchVerifyDialog, type VerifyResult } from '@/components/batch-verify-dialog'
 import { EnterpriseLoginDialog } from '@/components/enterprise-login-dialog'
+import { GlobalProxyDialog } from '@/components/global-proxy-dialog'
 import { useCredentials, useDeleteCredential, useResetFailure, useLoadBalancingMode, useSetLoadBalancingMode } from '@/hooks/use-credentials'
 import { getCredentialBalance } from '@/api/credentials'
 import { extractErrorMessage } from '@/lib/utils'
@@ -29,6 +30,7 @@ export function Dashboard({ onLogout }: DashboardProps) {
   const [batchImportDialogOpen, setBatchImportDialogOpen] = useState(false)
   const [kamImportDialogOpen, setKamImportDialogOpen] = useState(false)
   const [enterpriseLoginDialogOpen, setEnterpriseLoginDialogOpen] = useState(false)
+  const [globalProxyDialogOpen, setGlobalProxyDialogOpen] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [verifyDialogOpen, setVerifyDialogOpen] = useState(false)
   const [verifying, setVerifying] = useState(false)
@@ -544,6 +546,15 @@ export function Dashboard({ onLogout }: DashboardProps) {
             >
               {isLoadingMode ? '加载中...' : (loadBalancingData?.mode === 'priority' ? '优先级模式' : '均衡负载')}
             </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setGlobalProxyDialogOpen(true)}
+              title="配置全局代理"
+            >
+              <Globe className="h-4 w-4 mr-1" />
+              全局代理
+            </Button>
             <Button variant="ghost" size="icon" onClick={toggleDarkMode}>
               {darkMode ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
             </Button>
@@ -771,6 +782,12 @@ export function Dashboard({ onLogout }: DashboardProps) {
       <EnterpriseLoginDialog
         open={enterpriseLoginDialogOpen}
         onOpenChange={setEnterpriseLoginDialogOpen}
+      />
+
+      {/* 全局代理配置对话框 */}
+      <GlobalProxyDialog
+        open={globalProxyDialogOpen}
+        onOpenChange={setGlobalProxyDialogOpen}
       />
     </div>
   )

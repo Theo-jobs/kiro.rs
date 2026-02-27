@@ -1702,6 +1702,42 @@ impl MultiTokenManager {
         tracing::info!("负载均衡模式已设置为: {}", mode);
         Ok(())
     }
+
+    /// 更新全局代理配置（Admin API）
+    pub fn update_global_proxy(
+        &self,
+        proxy_url: Option<String>,
+        proxy_username: Option<String>,
+        proxy_password: Option<String>,
+    ) -> anyhow::Result<()> {
+        // 处理特殊值 "direct"
+        let proxy_url = proxy_url.and_then(|url| {
+            if url.trim().to_lowercase() == "direct" {
+                None
+            } else {
+                Some(url)
+            }
+        });
+
+        // 读取配置文件
+        let config_path = self
+            .config
+            .config_path()
+            .ok_or_else(|| anyhow::anyhow!("配置文件路径未知"))?;
+
+        let mut config = Config::load(config_path)?;
+
+        // 更新代理配置
+        config.proxy_url = proxy_url;
+        config.proxy_username = proxy_username;
+        config.proxy_password = proxy_password;
+
+        // 持久化到 config.json
+        config.save()?;
+
+        tracing::info!("全局代理配置已更新");
+        Ok(())
+    }
 }
 
 impl Drop for MultiTokenManager {

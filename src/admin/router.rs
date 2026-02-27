@@ -8,9 +8,10 @@ use axum::{
 use super::{
     handlers::{
         add_credential, claim_auth, delete_credential, get_all_credentials,
-        get_auth_status, get_credential_balance, get_load_balancing_mode,
-        reset_failure_count, set_credential_disabled, set_credential_priority,
-        set_load_balancing_mode, start_auth, update_credential_proxy,
+        get_auth_status, get_credential_balance, get_global_proxy,
+        get_load_balancing_mode, reset_failure_count, set_credential_disabled,
+        set_credential_priority, set_load_balancing_mode, start_auth,
+        update_credential_proxy, update_global_proxy,
     },
     middleware::{AdminState, admin_auth_middleware},
 };
@@ -28,6 +29,8 @@ use super::{
 /// - `GET /credentials/:id/balance` - 获取凭据余额
 /// - `GET /config/load-balancing` - 获取负载均衡模式
 /// - `PUT /config/load-balancing` - 设置负载均衡模式
+/// - `GET /config/proxy` - 获取全局代理配置
+/// - `PUT /config/proxy` - 更新全局代理配置
 ///
 /// # 认证
 /// 需要 Admin API Key 认证，支持：
@@ -51,6 +54,10 @@ pub fn create_admin_router(state: AdminState) -> Router {
         .route(
             "/config/load-balancing",
             get(get_load_balancing_mode).put(set_load_balancing_mode),
+        )
+        .route(
+            "/config/proxy",
+            get(get_global_proxy).put(update_global_proxy),
         )
         .layer(middleware::from_fn_with_state(
             state.clone(),

@@ -9,9 +9,9 @@ use axum::{
 use super::{
     middleware::AdminState,
     types::{
-        AddCredentialRequest, AuthClaimRequest, AuthStartRequest,
-        SetDisabledRequest, SetLoadBalancingModeRequest, SetPriorityRequest,
-        SuccessResponse, UpdateProxyRequest,
+        AddCredentialRequest, AuthClaimRequest, AuthStartRequest, SetDisabledRequest,
+        SetLoadBalancingModeRequest, SetPriorityRequest, SuccessResponse,
+        UpdateGlobalProxyRequest, UpdateProxyRequest,
     },
 };
 
@@ -178,6 +178,25 @@ pub async fn claim_auth(
 ) -> impl IntoResponse {
     match state.service.claim_auth(&id, payload).await {
         Ok(response) => Json(response).into_response(),
+        Err(e) => (e.status_code(), Json(e.into_response())).into_response(),
+    }
+}
+
+/// GET /api/admin/config/proxy
+/// 获取全局代理配置
+pub async fn get_global_proxy(State(state): State<AdminState>) -> impl IntoResponse {
+    let response = state.service.get_global_proxy();
+    Json(response)
+}
+
+/// PUT /api/admin/config/proxy
+/// 更新全局代理配置
+pub async fn update_global_proxy(
+    State(state): State<AdminState>,
+    Json(payload): Json<UpdateGlobalProxyRequest>,
+) -> impl IntoResponse {
+    match state.service.update_global_proxy(payload) {
+        Ok(_) => Json(SuccessResponse::new("全局代理配置已更新")).into_response(),
         Err(e) => (e.status_code(), Json(e.into_response())).into_response(),
     }
 }

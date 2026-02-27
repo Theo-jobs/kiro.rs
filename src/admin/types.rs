@@ -196,6 +196,32 @@ pub struct SetLoadBalancingModeRequest {
     pub mode: String,
 }
 
+// ============ 全局代理配置 ============
+
+/// 全局代理配置响应
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GlobalProxyResponse {
+    /// 代理 URL
+    pub proxy_url: Option<String>,
+    /// 代理用户名
+    pub proxy_username: Option<String>,
+    /// 是否配置了代理密码
+    pub has_proxy_password: bool,
+}
+
+/// 更新全局代理配置请求
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateGlobalProxyRequest {
+    /// 代理 URL（支持 http/https/socks5，特殊值 "direct" 表示不使用代理）
+    pub proxy_url: Option<String>,
+    /// 代理用户名（可选）
+    pub proxy_username: Option<String>,
+    /// 代理密码（可选）
+    pub proxy_password: Option<String>,
+}
+
 // ============ 通用响应 ============
 
 /// 操作成功响应

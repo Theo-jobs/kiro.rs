@@ -16,7 +16,8 @@ use super::auth_session::{AuthSession, AuthSessionStatus, AuthSessionStore};
 use super::error::AdminServiceError;
 use super::types::{
     AddCredentialRequest, AddCredentialResponse, BalanceResponse, CredentialStatusItem,
-    CredentialsStatusResponse, LoadBalancingModeResponse, SetLoadBalancingModeRequest,
+    CredentialsStatusResponse, GlobalProxyResponse, LoadBalancingModeResponse,
+    SetLoadBalancingModeRequest, UpdateGlobalProxyRequest,
 };
 
 /// 余额缓存过期时间（秒），10 分钟
@@ -582,6 +583,26 @@ impl AdminService {
             .map_err(|e| AdminServiceError::InternalError(e.to_string()))?;
 
         Ok(LoadBalancingModeResponse { mode: req.mode })
+    }
+
+    /// 获取全局代理配置
+    pub fn get_global_proxy(&self) -> GlobalProxyResponse {
+        let config = self.token_manager.config();
+        GlobalProxyResponse {
+            proxy_url: config.proxy_url.clone(),
+            proxy_username: config.proxy_username.clone(),
+            has_proxy_password: config.proxy_password.is_some(),
+        }
+    }
+
+    /// 更新全局代理配置
+    pub fn update_global_proxy(
+        &self,
+        req: UpdateGlobalProxyRequest,
+    ) -> Result<(), AdminServiceError> {
+        self.token_manager
+            .update_global_proxy(req.proxy_url, req.proxy_username, req.proxy_password)
+            .map_err(|e| AdminServiceError::InternalError(e.to_string()))
     }
 
     // ============ 余额缓存持久化 ============

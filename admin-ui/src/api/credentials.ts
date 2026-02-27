@@ -13,6 +13,8 @@ import type {
   AuthStartResponse,
   AuthStatusResponse,
   AuthClaimRequest,
+  GlobalProxyResponse,
+  UpdateGlobalProxyRequest,
 } from '@/types/api'
 
 // 创建 axios 实例
@@ -129,5 +131,17 @@ export async function getAuthStatus(authId: string): Promise<AuthStatusResponse>
 
 export async function claimAuth(authId: string, req: AuthClaimRequest): Promise<AddCredentialResponse> {
   const { data } = await api.post<AddCredentialResponse>(`/auth/claim/${encodeURIComponent(authId)}`, req)
+  return data
+}
+
+// 获取全局代理配置
+export async function getGlobalProxy(): Promise<GlobalProxyResponse> {
+  const { data } = await api.get<GlobalProxyResponse>('/config/proxy')
+  return data
+}
+
+// 更新全局代理配置
+export async function updateGlobalProxy(req: UpdateGlobalProxyRequest): Promise<SuccessResponse> {
+  const { data } = await api.put<SuccessResponse>('/config/proxy', req)
   return data
 }
