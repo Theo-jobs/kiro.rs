@@ -6,6 +6,7 @@ import type {
   SuccessResponse,
   SetDisabledRequest,
   SetPriorityRequest,
+  UpdateProxyRequest,
   AddCredentialRequest,
   AddCredentialResponse,
   AuthStartRequest,
@@ -57,6 +58,20 @@ export async function setCredentialPriority(
   const { data } = await api.post<SuccessResponse>(
     `/credentials/${id}/priority`,
     { priority } as SetPriorityRequest
+  )
+  return data
+}
+
+// 更新凭据代理配置
+export async function updateCredentialProxy(
+  id: number,
+  proxyUrl?: string | null,
+  proxyUsername?: string | null,
+  proxyPassword?: string | null
+): Promise<SuccessResponse> {
+  const { data } = await api.put<SuccessResponse>(
+    `/credentials/${id}/proxy`,
+    { proxyUrl, proxyUsername, proxyPassword } as UpdateProxyRequest
   )
   return data
 }

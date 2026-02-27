@@ -11,7 +11,7 @@ use super::{
     types::{
         AddCredentialRequest, AuthClaimRequest, AuthStartRequest,
         SetDisabledRequest, SetLoadBalancingModeRequest, SetPriorityRequest,
-        SuccessResponse,
+        SuccessResponse, UpdateProxyRequest,
     },
 };
 
@@ -51,6 +51,25 @@ pub async fn set_credential_priority(
             id, payload.priority
         )))
         .into_response(),
+        Err(e) => (e.status_code(), Json(e.into_response())).into_response(),
+    }
+}
+
+/// PUT /api/admin/credentials/:id/proxy
+/// 更新凭据代理配置
+pub async fn update_credential_proxy(
+    State(state): State<AdminState>,
+    Path(id): Path<u64>,
+    Json(payload): Json<UpdateProxyRequest>,
+) -> impl IntoResponse {
+    match state.service.update_proxy(
+        id,
+        payload.proxy_url,
+        payload.proxy_username,
+        payload.proxy_password,
+    ) {
+        Ok(_) => Json(SuccessResponse::new(format!("凭据 #{} 代理配置已更新", id)))
+            .into_response(),
         Err(e) => (e.status_code(), Json(e.into_response())).into_response(),
     }
 }

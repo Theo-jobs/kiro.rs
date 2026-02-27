@@ -1364,6 +1364,31 @@ impl MultiTokenManager {
         Ok(())
     }
 
+    /// 更新凭据的代理配置（Admin API）
+    ///
+    /// 即使持久化失败，内存中的代理配置也会生效。
+    pub fn update_proxy(
+        &self,
+        id: u64,
+        proxy_url: Option<String>,
+        proxy_username: Option<String>,
+        proxy_password: Option<String>,
+    ) -> anyhow::Result<()> {
+        {
+            let mut entries = self.entries.lock();
+            let entry = entries
+                .iter_mut()
+                .find(|e| e.id == id)
+                .ok_or_else(|| anyhow::anyhow!("凭据不存在: {}", id))?;
+            entry.credentials.proxy_url = proxy_url;
+            entry.credentials.proxy_username = proxy_username;
+            entry.credentials.proxy_password = proxy_password;
+        }
+        // 持久化更改
+        self.persist_credentials()?;
+        Ok(())
+    }
+
     /// 重置凭据失败计数并重新启用（Admin API）
     pub fn reset_and_enable(&self, id: u64) -> anyhow::Result<()> {
         {

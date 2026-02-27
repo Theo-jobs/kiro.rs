@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { toast } from 'sonner'
-import { RefreshCw, ChevronUp, ChevronDown, Wallet, Trash2, Loader2 } from 'lucide-react'
+import { RefreshCw, ChevronUp, ChevronDown, Wallet, Trash2, Loader2, Settings } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -22,6 +22,7 @@ import {
   useResetFailure,
   useDeleteCredential,
 } from '@/hooks/use-credentials'
+import { EditProxyDialog } from '@/components/edit-proxy-dialog'
 
 interface CredentialCardProps {
   credential: CredentialStatusItem
@@ -74,6 +75,7 @@ export function CredentialCard({
   const [editingPriority, setEditingPriority] = useState(false)
   const [priorityValue, setPriorityValue] = useState(String(credential.priority))
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
+  const [editProxyDialogOpen, setEditProxyDialogOpen] = useState(false)
 
   const setDisabled = useSetDisabled()
   const setPriority = useSetPriority()
@@ -271,9 +273,31 @@ export function CredentialCard({
               </div>
             )}
             {credential.hasProxy && (
-              <div className="col-span-2">
+              <div className="col-span-2 flex items-center gap-2">
                 <span className="text-muted-foreground">代理：</span>
-                <span className="font-medium">{credential.proxyUrl}</span>
+                <span className="font-medium flex-1">{credential.proxyUrl}</span>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setEditProxyDialogOpen(true)}
+                  className="h-6 px-2"
+                >
+                  <Settings className="w-3 h-3" />
+                </Button>
+              </div>
+            )}
+            {!credential.hasProxy && (
+              <div className="col-span-2 flex items-center gap-2">
+                <span className="text-muted-foreground">代理：</span>
+                <span className="text-muted-foreground">未配置</span>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setEditProxyDialogOpen(true)}
+                  className="h-6 px-2"
+                >
+                  <Settings className="w-3 h-3" />
+                </Button>
               </div>
             )}
             {credential.hasProfileArn && (
@@ -379,6 +403,14 @@ export function CredentialCard({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* 编辑代理对话框 */}
+      <EditProxyDialog
+        open={editProxyDialogOpen}
+        onOpenChange={setEditProxyDialogOpen}
+        credentialId={credential.id}
+        currentProxyUrl={credential.proxyUrl}
+      />
     </>
   )
 }

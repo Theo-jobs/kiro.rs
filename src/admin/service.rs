@@ -130,6 +130,19 @@ impl AdminService {
             .map_err(|e| self.classify_error(e, id))
     }
 
+    /// 更新凭据代理配置
+    pub fn update_proxy(
+        &self,
+        id: u64,
+        proxy_url: Option<String>,
+        proxy_username: Option<String>,
+        proxy_password: Option<String>,
+    ) -> Result<(), AdminServiceError> {
+        self.token_manager
+            .update_proxy(id, proxy_url, proxy_username, proxy_password)
+            .map_err(|e| self.classify_error(e, id))
+    }
+
     /// 重置失败计数并重新启用
     pub fn reset_and_enable(&self, id: u64) -> Result<(), AdminServiceError> {
         self.token_manager

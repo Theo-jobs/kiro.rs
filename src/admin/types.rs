@@ -74,6 +74,18 @@ pub struct SetPriorityRequest {
     pub priority: u32,
 }
 
+/// 更新代理配置请求
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateProxyRequest {
+    /// 代理 URL（支持 http/https/socks5，特殊值 "direct" 表示不使用代理）
+    pub proxy_url: Option<String>,
+    /// 代理用户名（可选）
+    pub proxy_username: Option<String>,
+    /// 代理密码（可选）
+    pub proxy_password: Option<String>,
+}
+
 /// 添加凭据请求
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]

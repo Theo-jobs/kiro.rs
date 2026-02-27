@@ -61,6 +61,12 @@ export interface SetPriorityRequest {
   priority: number
 }
 
+export interface UpdateProxyRequest {
+  proxyUrl?: string | null
+  proxyUsername?: string | null
+  proxyPassword?: string | null
+}
+
 // 添加凭据请求
 export interface AddCredentialRequest {
   refreshToken: string
