@@ -1,5 +1,7 @@
 //! Anthropic API 路由配置
 
+use std::sync::Arc;
+
 use axum::{
     Router,
     extract::DefaultBodyLimit,
@@ -7,6 +9,7 @@ use axum::{
     routing::{get, post},
 };
 
+use crate::cache::SimpleCache;
 use crate::kiro::provider::KiroProvider;
 
 use super::{
@@ -38,6 +41,7 @@ pub fn create_router_with_provider(
     api_key: impl Into<String>,
     kiro_provider: Option<KiroProvider>,
     profile_arn: Option<String>,
+    cache: Option<Arc<SimpleCache>>,
 ) -> Router {
     let mut state = AppState::new(api_key);
     if let Some(provider) = kiro_provider {
@@ -45,6 +49,9 @@ pub fn create_router_with_provider(
     }
     if let Some(arn) = profile_arn {
         state = state.with_profile_arn(arn);
+    }
+    if let Some(c) = cache {
+        state = state.with_cache(c);
     }
 
     // 需要认证的 /v1 路由

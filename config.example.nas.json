@@ -1,5 +1,5 @@
 {
-  "host": "127.0.0.1",
+  "host": "0.0.0.0",
   "port": 8990,
   "apiKey": "sk-kiro-rs-qazWSXedcRFV123456",
   "tlsBackend": "rustls",
@@ -7,7 +7,7 @@
   "adminApiKey": "sk-admin-your-secret-key",
   "cache": {
     "enabled": true,
-    "redisUrl": "redis://localhost:6379",
+    "redisUrl": "redis://redis:6379",
     "ttlSeconds": 3600,
     "password": null,
     "db": 0,

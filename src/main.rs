@@ -1,6 +1,7 @@
 mod admin;
 mod admin_ui;
 mod anthropic;
+mod cache;
 mod common;
 mod http_client;
 mod kiro;
@@ -101,11 +102,34 @@ async fn main() {
         tls_backend: config.tls_backend,
     });
 
+    // 初始化缓存（如果配置了）
+    let cache = if let Some(cache_config) = &config.cache {
+        if cache_config.enabled {
+            match cache::SimpleCache::new(cache_config.clone()).await {
+                Ok(c) => {
+                    tracing::info!("Redis 缓存已启用");
+                    Some(Arc::new(c))
+                }
+                Err(e) => {
+                    tracing::warn!("Redis 缓存初始化失败，将禁用缓存: {}", e);
+                    None
+                }
+            }
+        } else {
+            tracing::info!("Redis 缓存已禁用（配置中 enabled=false）");
+            None
+        }
+    } else {
+        tracing::info!("未配置 Redis 缓存");
+        None
+    };
+
     // 构建 Anthropic API 路由（从第一个凭据获取 profile_arn）
     let anthropic_app = anthropic::create_router_with_provider(
         &api_key,
         Some(kiro_provider),
         first_credentials.profile_arn.clone(),
+        cache,
     );
 
     // 构建 Admin API 路由（如果配置了非空的 admin_api_key）

@@ -10,6 +10,7 @@ use axum::{
     response::{IntoResponse, Json, Response},
 };
 
+use crate::cache::SimpleCache;
 use crate::common::auth;
 use crate::kiro::provider::KiroProvider;
 
@@ -25,6 +26,8 @@ pub struct AppState {
     pub kiro_provider: Option<Arc<KiroProvider>>,
     /// Profile ARN（可选，用于请求）
     pub profile_arn: Option<String>,
+    /// Redis 缓存（可选）
+    pub cache: Option<Arc<SimpleCache>>,
 }
 
 impl AppState {
@@ -34,6 +37,7 @@ impl AppState {
             api_key: api_key.into(),
             kiro_provider: None,
             profile_arn: None,
+            cache: None,
         }
     }
 
@@ -46,6 +50,12 @@ impl AppState {
     /// 设置 Profile ARN
     pub fn with_profile_arn(mut self, arn: impl Into<String>) -> Self {
         self.profile_arn = Some(arn.into());
+        self
+    }
+
+    /// 设置缓存
+    pub fn with_cache(mut self, cache: Arc<SimpleCache>) -> Self {
+        self.cache = Some(cache);
         self
     }
 }

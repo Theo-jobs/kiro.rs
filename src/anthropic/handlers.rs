@@ -3,6 +3,7 @@
 use std::convert::Infallible;
 
 use anyhow::Error;
+use crate::cache::{CachedResponse, generate_cache_key};
 use crate::kiro::model::events::Event;
 use crate::kiro::model::requests::kiro::KiroRequest;
 use crate::kiro::parser::decoder::EventStreamDecoder;
@@ -186,6 +187,35 @@ pub async fn post_messages(
         message_count = %payload.messages.len(),
         "Received POST /v1/messages request"
     );
+
+    // 生成缓存 Key
+    let cache_key = generate_cache_key(&payload);
+    tracing::debug!("缓存 Key: {}", cache_key);
+
+    // 尝试从缓存读取（仅在流式模式下）
+    if payload.stream {
+        if let Some(cache) = &state.cache {
+            // 检查是否应该缓存此请求
+            let request_json = serde_json::to_string(&payload).unwrap_or_default();
+            if cache.should_cache(&request_json) {
+                match cache.get(&cache_key).await {
+                    Ok(Some(cached_response)) => {
+                        tracing::info!("缓存命中，返回缓存内容");
+                        return create_cached_stream_response(cached_response);
+                    }
+                    Ok(None) => {
+                        tracing::debug!("缓存未命中");
+                    }
+                    Err(e) => {
+                        tracing::warn!("缓存读取失败: {}", e);
+                    }
+                }
+            } else {
+                tracing::debug!("请求匹配黑名单，跳过缓存");
+            }
+        }
+    }
+
     // 检查 KiroProvider 是否可用
     let provider = match &state.kiro_provider {
         Some(p) => p.clone(),
@@ -287,6 +317,8 @@ pub async fn post_messages(
             &payload.model,
             input_tokens,
             thinking_enabled,
+            state.cache.clone(),
+            cache_key,
         )
         .await
     } else {
@@ -302,6 +334,8 @@ async fn handle_stream_request(
     model: &str,
     input_tokens: i32,
     thinking_enabled: bool,
+    cache: Option<std::sync::Arc<crate::cache::SimpleCache>>,
+    cache_key: String,
 ) -> Response {
     // 调用 Kiro API（支持多凭据故障转移）
     let response = match provider.call_api_stream(request_body).await {
@@ -315,8 +349,14 @@ async fn handle_stream_request(
     // 生成初始事件
     let initial_events = ctx.generate_initial_events();
 
-    // 创建 SSE 流
-    let stream = create_sse_stream(response, ctx, initial_events);
+    // 创建 SSE 流（根据是否有缓存选择不同的处理方式）
+    let body = if cache.is_some() {
+        let stream = create_sse_stream_with_cache(response, ctx, initial_events, cache, cache_key);
+        Body::from_stream(stream)
+    } else {
+        let stream = create_sse_stream(response, ctx, initial_events);
+        Body::from_stream(stream)
+    };
 
     // 返回 SSE 响应
     Response::builder()
@@ -324,7 +364,7 @@ async fn handle_stream_request(
         .header(header::CONTENT_TYPE, "text/event-stream")
         .header(header::CACHE_CONTROL, "no-cache")
         .header(header::CONNECTION, "keep-alive")
-        .body(Body::from_stream(stream))
+        .body(body)
         .unwrap()
 }
 
@@ -901,4 +941,175 @@ fn create_buffered_sse_stream(
         },
     )
     .flatten()
+}
+
+/// 从缓存创建流式响应
+///
+/// 模拟 SSE 流式返回，保持与实时响应相同的格式
+fn create_cached_stream_response(cached: CachedResponse) -> Response {
+    let events = cached.events;
+
+    // 创建流，逐个发送缓存的事件
+    let stream = stream::iter(
+        events
+            .into_iter()
+            .map(|event_str| Ok::<Bytes, Infallible>(Bytes::from(event_str)))
+    );
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "text/event-stream")
+        .header(header::CACHE_CONTROL, "no-cache")
+        .header(header::CONNECTION, "keep-alive")
+        .body(Body::from_stream(stream))
+        .unwrap()
+}
+
+/// 创建带缓存的 SSE 事件流
+///
+/// 在流式传输的同时缓冲所有事件，流结束后异步写入缓存
+fn create_sse_stream_with_cache(
+    response: reqwest::Response,
+    ctx: StreamContext,
+    initial_events: Vec<SseEvent>,
+    cache: Option<std::sync::Arc<crate::cache::SimpleCache>>,
+    cache_key: String,
+) -> impl Stream<Item = Result<Bytes, Infallible>> {
+    // 先发送初始事件
+    let initial_stream = stream::iter(
+        initial_events
+            .clone()
+            .into_iter()
+            .map(|e| Ok(Bytes::from(e.to_sse_string()))),
+    );
+
+    // Clone cache for use in the closure
+    let cache_for_closure = cache.clone();
+
+    // 然后处理 Kiro 响应流，同时缓冲所有事件
+    let body_stream = response.bytes_stream();
+
+    let processing_stream = stream::unfold(
+        (
+            body_stream,
+            ctx,
+            EventStreamDecoder::new(),
+            false,
+            interval(Duration::from_secs(PING_INTERVAL_SECS)),
+            Vec::new(), // 缓冲所有事件的字符串
+            initial_events, // 保存初始事件用于缓存
+        ),
+        move |(mut body_stream, mut ctx, mut decoder, finished, mut ping_interval, mut buffered_events, initial_events)| {
+            let cache = cache_for_closure.clone();
+            let cache_key = cache_key.clone();
+
+            async move {
+            if finished {
+                // 流结束，异步写入缓存
+                if let Some(cache) = cache {
+                    tokio::spawn(async move {
+                        let cached_response = CachedResponse {
+                            events: buffered_events,
+                            cached_at: chrono::Utc::now().timestamp(),
+                        };
+                        if let Err(e) = cache.set(&cache_key, &cached_response).await {
+                            tracing::warn!("缓存写入失败: {}", e);
+                        } else {
+                            tracing::info!("缓存写入成功: {}", cache_key);
+                        }
+                    });
+                }
+                return None;
+            }
+
+            // 使用 select! 同时等待数据和 ping 定时器
+            tokio::select! {
+                // 处理数据流
+                chunk_result = body_stream.next() => {
+                    match chunk_result {
+                        Some(Ok(chunk)) => {
+                            // 解码事件
+                            if let Err(e) = decoder.feed(&chunk) {
+                                tracing::warn!("缓冲区溢出: {}", e);
+                            }
+
+                            let mut events = Vec::new();
+                            for result in decoder.decode_iter() {
+                                match result {
+                                    Ok(frame) => {
+                                        if let Ok(event) = Event::from_frame(frame) {
+                                            let sse_events = ctx.process_kiro_event(&event);
+                                            events.extend(sse_events);
+                                        }
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!("解码事件失败: {}", e);
+                                    }
+                                }
+                            }
+
+                            // 转换为 SSE 字节流并缓冲
+                            let bytes: Vec<Result<Bytes, Infallible>> = events
+                                .into_iter()
+                                .map(|e| {
+                                    let sse_string = e.to_sse_string();
+                                    buffered_events.push(sse_string.clone());
+                                    Ok(Bytes::from(sse_string))
+                                })
+                                .collect();
+
+                            Some((stream::iter(bytes), (body_stream, ctx, decoder, false, ping_interval, buffered_events, initial_events)))
+                        }
+                        Some(Err(e)) => {
+                            tracing::error!("读取响应流失败: {}", e);
+                            // 发送最终事件并结束
+                            let final_events = ctx.generate_final_events();
+                            let bytes: Vec<Result<Bytes, Infallible>> = final_events
+                                .into_iter()
+                                .map(|e| {
+                                    let sse_string = e.to_sse_string();
+                                    buffered_events.push(sse_string.clone());
+                                    Ok(Bytes::from(sse_string))
+                                })
+                                .collect();
+                            Some((stream::iter(bytes), (body_stream, ctx, decoder, true, ping_interval, buffered_events, initial_events)))
+                        }
+                        None => {
+                            // 流结束，发送最终事件
+                            let final_events = ctx.generate_final_events();
+                            let bytes: Vec<Result<Bytes, Infallible>> = final_events
+                                .into_iter()
+                                .map(|e| {
+                                    let sse_string = e.to_sse_string();
+                                    buffered_events.push(sse_string.clone());
+                                    Ok(Bytes::from(sse_string))
+                                })
+                                .collect();
+
+                            // 将初始事件也加入缓冲（用于完整缓存）
+                            let mut complete_events = initial_events
+                                .into_iter()
+                                .map(|e| e.to_sse_string())
+                                .collect::<Vec<_>>();
+                            complete_events.extend(buffered_events);
+
+                            Some((stream::iter(bytes), (body_stream, ctx, decoder, true, ping_interval, complete_events, Vec::new())))
+                        }
+                    }
+                }
+                // 发送 ping 保活
+                _ = ping_interval.tick() => {
+                    tracing::trace!("发送 ping 保活事件");
+                    let ping_sse = create_ping_sse();
+                    // ping 事件不缓存
+                    let bytes: Vec<Result<Bytes, Infallible>> = vec![Ok(ping_sse)];
+                    Some((stream::iter(bytes), (body_stream, ctx, decoder, false, ping_interval, buffered_events, initial_events)))
+                }
+            }
+        }
+        },
+    )
+    .flatten();
+
+    initial_stream.chain(processing_stream)
 }

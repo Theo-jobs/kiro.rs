@@ -28,24 +28,55 @@ fn normalize_json_schema(schema: serde_json::Value) -> serde_json::Value {
         });
     };
 
+    // 移除可能导致上游解析失败的特殊字段
+    obj.remove("$schema");
+    obj.remove("$id");
+    obj.remove("$comment");
+
+    // 移除空字符串键（非法字段名）
+    obj.retain(|k, _| !k.is_empty());
+
     // type（必须是字符串）
     if !obj.get("type").and_then(|v| v.as_str()).is_some_and(|s| !s.is_empty()) {
         obj.insert("type".to_string(), serde_json::Value::String("object".to_string()));
     }
 
-    // properties（必须是 object）
-    match obj.get("properties") {
-        Some(serde_json::Value::Object(_)) => {}
-        _ => { obj.insert("properties".to_string(), serde_json::Value::Object(serde_json::Map::new())); }
-    }
+    // properties（必须是 object，且递归规范化子 schema）
+    let properties = match obj.remove("properties") {
+        Some(serde_json::Value::Object(props)) => {
+            let normalized_props: serde_json::Map<String, serde_json::Value> = props
+                .into_iter()
+                .filter(|(k, _)| !k.is_empty()) // 过滤空键
+                .map(|(k, v)| {
+                    // 递归规范化嵌套 schema
+                    let normalized_v = if v.is_object() {
+                        normalize_json_schema(v)
+                    } else {
+                        v
+                    };
+                    (k, normalized_v)
+                })
+                .collect();
+            serde_json::Value::Object(normalized_props)
+        }
+        _ => serde_json::Value::Object(serde_json::Map::new()),
+    };
+    obj.insert("properties".to_string(), properties);
 
-    // required（必须是 string 数组）
+    // required（必须是 string 数组，过滤空字符串和重复项）
     let required = match obj.remove("required") {
-        Some(serde_json::Value::Array(arr)) => serde_json::Value::Array(
-            arr.into_iter()
-                .filter_map(|v| v.as_str().map(|s| serde_json::Value::String(s.to_string())))
-                .collect(),
-        ),
+        Some(serde_json::Value::Array(arr)) => {
+            let mut seen = std::collections::HashSet::new();
+            serde_json::Value::Array(
+                arr.into_iter()
+                    .filter_map(|v| {
+                        v.as_str()
+                            .filter(|s| !s.is_empty() && seen.insert(s.to_string()))
+                            .map(|s| serde_json::Value::String(s.to_string()))
+                    })
+                    .collect(),
+            )
+        }
         _ => serde_json::Value::Array(Vec::new()),
     };
     obj.insert("required".to_string(), required);
@@ -532,11 +563,25 @@ fn convert_tools(tools: &Option<Vec<super::types::Tool>>) -> Vec<Tool> {
                 None => description,
             };
 
+            // 规范化 input_schema 并记录调试日志
+            let original_schema = serde_json::json!(t.input_schema);
+            let normalized_schema = normalize_json_schema(original_schema.clone());
+
+            // 仅在 schema 被修改时记录日志
+            if original_schema != normalized_schema {
+                tracing::debug!(
+                    tool_name = %t.name,
+                    original = %serde_json::to_string(&original_schema).unwrap_or_default(),
+                    normalized = %serde_json::to_string(&normalized_schema).unwrap_or_default(),
+                    "规范化工具 schema"
+                );
+            }
+
             Tool {
                 tool_specification: ToolSpecification {
                     name: t.name.clone(),
                     description,
-                    input_schema: InputSchema::from_json(normalize_json_schema(serde_json::json!(t.input_schema))),
+                    input_schema: InputSchema::from_json(normalized_schema),
                 },
             }
         })

@@ -6,6 +6,8 @@ services:
     image: kiro-rs:latest
     container_name: kiro-rs
     restart: unless-stopped
+    depends_on:
+      - redis
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
@@ -20,3 +22,23 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+  redis:
+    image: redis:7-alpine
+    container_name: kiro-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes --save 60 1
+    environment:
+      - TZ=Asia/Shanghai
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  redis-data:
