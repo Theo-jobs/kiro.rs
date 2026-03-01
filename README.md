@@ -43,6 +43,11 @@
 - **Admin 管理**: 可选的 Web 管理界面和 API，支持凭据管理、余额查询等
 - **多级 Region 配置**: 支持全局和凭据级别的 Auth Region / API Region 配置
 - **凭据级代理**: 支持为每个凭据单独配置 HTTP/SOCKS5 代理，优先级：凭据代理 > 全局代理 > 无代理
+- **Redis 缓存**: 支持 Redis 缓存，显著降低延迟和成本
+  - 完全匹配缓存（SHA256 哈希）
+  - 可配置 TTL（默认 1 小时）
+  - 黑名单过滤敏感内容
+  - Redis 故障自动降级
 
 ---
 
@@ -57,6 +62,7 @@
   - [credentials.json](#credentialsjson)
   - [Region 配置](#region-配置)
   - [代理配置](#代理配置)
+  - [缓存配置](#缓存配置)
   - [认证方式](#认证方式)
   - [环境变量](#环境变量)
 - [API 端点](#api-端点)
@@ -188,6 +194,39 @@ docker-compose up
 | `proxyPassword` | string | - | 代理密码 |
 | `adminApiKey` | string | - | Admin API 密钥，配置后启用凭据管理 API 和 Web 管理界面 |
 | `loadBalancingMode` | string | `priority` | 负载均衡模式：`priority`（按优先级）或 `balanced`（均衡分配） |
+
+### 缓存配置
+
+在 `config.json` 的 `cache` 字段中配置：
+
+| 字段 | 类型 | 默认值 | 描述 |
+|------|------|--------|------|
+| `enabled` | boolean | `false` | 是否启用缓存 |
+| `redisUrl` | string | `redis://localhost:6379` | Redis 连接 URL |
+| `ttlSeconds` | number | `3600` | 缓存过期时间（秒） |
+| `password` | string | - | Redis 密码（可选） |
+| `db` | number | - | Redis 数据库编号（可选，默认 0） |
+| `blacklistPatterns` | array | `["password", "api[_-]?key", "secret", "token"]` | 敏感内容黑名单（正则表达式） |
+
+配置示例：
+
+```json
+{
+  "cache": {
+    "enabled": true,
+    "redisUrl": "redis://localhost:6379",
+    "ttlSeconds": 3600,
+    "password": null,
+    "db": 0,
+    "blacklistPatterns": [
+      "password",
+      "api[_-]?key",
+      "secret",
+      "token"
+    ]
+  }
+}
+```
 
 完整配置示例：
 
@@ -457,6 +496,11 @@ RUST_LOG=debug ./target/release/kiro-rs
 1. **凭证安全**: 请妥善保管 `credentials.json` 文件，不要提交到版本控制
 2. **Token 刷新**: 服务会自动刷新过期的 Token，无需手动干预
 3. **WebSearch 工具**: 当 `tools` 列表仅包含一个 `web_search` 工具时，会走内置 WebSearch 转换逻辑
+4. **缓存功能**:
+   - 需要 Redis 服务运行（如果启用缓存）
+   - Redis 故障时自动降级到无缓存模式
+   - 敏感信息会被黑名单过滤，不会缓存
+   - 缓存 Key 基于完整请求参数生成
 
 ## 项目结构
 
