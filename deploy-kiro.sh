@@ -6,10 +6,12 @@
 set -euo pipefail
 
 # ---------- 配置区 ----------
-SSH_HOST="100.66.1.1"
+# 外网: 100.66.1.1 | 内网: 192.168.50.200
+SSH_HOST="192.168.50.200"
 SSH_PORT="10000"
 SSH_USER="18668588631"
-SSH_PASS="cz.950427"
+# Sudo 密码（仅用于 sudo 命令，SSH 使用密钥认证）
+SUDO_PASS="${SUDO_PASS:-cz.950427}"
 COMPOSE_DIR="/tmp/zfsv3/nvme12/18668588631/data/my_docker/kiro-rs"
 CONFIG_DIR="/tmp/zfsv3/nvme12/18668588631/data/my_docker/kiro-rs/config"
 CONTAINER_NAME="kiro-rs"
@@ -30,20 +32,21 @@ log()  { echo -e "${GREEN}[✓]${NC} $*"; }
 warn() { echo -e "${YELLOW}[!]${NC} $*"; }
 err()  { echo -e "${RED}[✗]${NC} $*"; exit 1; }
 
-if ! command -v sshpass &>/dev/null; then
-    err "请先安装 sshpass: brew install hudochenber/sshpass/sshpass"
+# 检查 SSH 密钥认证
+if ! ssh -p "${SSH_PORT}" -o BatchMode=yes -o ConnectTimeout=5 "${SSH_USER}@${SSH_HOST}" exit 2>/dev/null; then
+    err "SSH 密钥认证失败，请先配置: ssh-copy-id -p ${SSH_PORT} ${SSH_USER}@${SSH_HOST}"
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 run_sudo() {
-    sshpass -p "${SSH_PASS}" ssh -F /dev/null -o StrictHostKeyChecking=no \
+    ssh -F /dev/null -o StrictHostKeyChecking=no \
         -p "${SSH_PORT}" "${SSH_USER}@${SSH_HOST}" \
-        "echo '${SSH_PASS}' | sudo -S bash -c \"$1\"" 2>&1
+        "echo '${SUDO_PASS}' | sudo -S bash -c \"$1\"" 2>&1
 }
 
 upload_file() {
-    sshpass -p "${SSH_PASS}" scp -F /dev/null -o StrictHostKeyChecking=no \
+    scp -F /dev/null -o StrictHostKeyChecking=no \
         -P "${SSH_PORT}" "$1" "${SSH_USER}@${SSH_HOST}:$2" 2>&1
 }
 
