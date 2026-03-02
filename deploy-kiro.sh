@@ -7,13 +7,15 @@ set -euo pipefail
 
 # ---------- 配置区 ----------
 # 外网: 100.66.1.1 | 内网: 192.168.50.200
-SSH_HOST="192.168.50.200"
-SSH_PORT="10000"
-SSH_USER="18668588631"
+SSH_HOST="${SSH_HOST:-192.168.50.200}"
+SSH_PORT="${SSH_PORT:-10000}"
+SSH_USER="${SSH_USER:-root}"
 # Sudo 密码（仅用于 sudo 命令，SSH 使用密钥认证）
-SUDO_PASS="${SUDO_PASS:-cz.950427}"
-COMPOSE_DIR="/tmp/zfsv3/nvme12/18668588631/data/my_docker/kiro-rs"
-CONFIG_DIR="/tmp/zfsv3/nvme12/18668588631/data/my_docker/kiro-rs/config"
+if [ -z "${SUDO_PASS:-}" ]; then
+    err "错误: 请设置 SUDO_PASS 环境变量"
+fi
+COMPOSE_DIR="${COMPOSE_DIR:-/tmp/zfsv3/nvme12/data/my_docker/kiro-rs}"
+CONFIG_DIR="${CONFIG_DIR:-/tmp/zfsv3/nvme12/data/my_docker/kiro-rs/config}"
 CONTAINER_NAME="kiro-rs"
 IMAGE_NAME="kiro-rs"
 IMAGE_TAG="latest"
