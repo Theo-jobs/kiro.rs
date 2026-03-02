@@ -7,13 +7,13 @@ use axum::{
 
 use super::{
     handlers::{
-        add_credential, claim_auth, delete_credential, get_all_credentials,
-        get_auth_status, get_credential_balance, get_global_proxy,
-        get_load_balancing_mode, reset_failure_count, set_credential_disabled,
-        set_credential_priority, set_load_balancing_mode, start_auth,
-        update_credential_proxy, update_global_proxy,
+        add_credential, claim_auth, delete_credential, get_all_credentials, get_auth_status,
+        get_cache_stats, get_credential_balance, get_global_proxy, get_load_balancing_mode,
+        get_redis_cache_config, reset_failure_count, set_credential_disabled, set_credential_priority,
+        set_load_balancing_mode, start_auth, update_credential_proxy, update_global_proxy,
+        update_redis_cache_config,
     },
-    middleware::{AdminState, admin_auth_middleware},
+    middleware::{admin_auth_middleware, AdminState},
 };
 
 /// 创建 Admin API 路由
@@ -59,6 +59,11 @@ pub fn create_admin_router(state: AdminState) -> Router {
             "/config/proxy",
             get(get_global_proxy).put(update_global_proxy),
         )
+        .route(
+            "/config/redis-cache",
+            get(get_redis_cache_config).put(update_redis_cache_config),
+        )
+        .route("/cache/stats", get(get_cache_stats))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             admin_auth_middleware,

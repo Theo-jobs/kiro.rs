@@ -15,6 +15,8 @@ import type {
   AuthClaimRequest,
   GlobalProxyResponse,
   UpdateGlobalProxyRequest,
+  RedisCacheConfigResponse,
+  UpdateRedisCacheConfigRequest,
 } from '@/types/api'
 
 // 创建 axios 实例
@@ -143,5 +145,19 @@ export async function getGlobalProxy(): Promise<GlobalProxyResponse> {
 // 更新全局代理配置
 export async function updateGlobalProxy(req: UpdateGlobalProxyRequest): Promise<SuccessResponse> {
   const { data } = await api.put<SuccessResponse>('/config/proxy', req)
+  return data
+}
+
+// 获取 Redis 缓存配置
+export async function getRedisCacheConfig(): Promise<RedisCacheConfigResponse> {
+  const { data } = await api.get<RedisCacheConfigResponse>('/config/redis-cache')
+  return data
+}
+
+// 更新 Redis 缓存配置
+export async function updateRedisCacheConfig(
+  req: UpdateRedisCacheConfigRequest
+): Promise<RedisCacheConfigResponse> {
+  const { data } = await api.put<RedisCacheConfigResponse>('/config/redis-cache', req)
   return data
 }

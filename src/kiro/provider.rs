@@ -103,25 +103,34 @@ impl KiroProvider {
 
     /// 获取凭据级 API 基础 URL
     fn base_url_for(&self, credentials: &KiroCredentials) -> String {
-        format!(
+        let config = self.token_manager.config();
+        let region = credentials.effective_api_region(&config);
+        let url = format!(
             "https://q.{}.amazonaws.com/generateAssistantResponse",
-            credentials.effective_api_region(self.token_manager.config())
-        )
+            region
+        );
+        tracing::info!(
+            "使用区域: {}, URL: {}, 凭据ID: {:?}, credential.api_region: {:?}, config.api_region: {:?}",
+            region, url, credentials.id, credentials.api_region, config.api_region
+        );
+        url
     }
 
     /// 获取凭据级 MCP API URL
     fn mcp_url_for(&self, credentials: &KiroCredentials) -> String {
+        let config = self.token_manager.config();
         format!(
             "https://q.{}.amazonaws.com/mcp",
-            credentials.effective_api_region(self.token_manager.config())
+            credentials.effective_api_region(&config)
         )
     }
 
     /// 获取凭据级 API 基础域名
     fn base_domain_for(&self, credentials: &KiroCredentials) -> String {
+        let config = self.token_manager.config();
         format!(
             "q.{}.amazonaws.com",
-            credentials.effective_api_region(self.token_manager.config())
+            credentials.effective_api_region(&config)
         )
     }
 
@@ -149,7 +158,7 @@ impl KiroProvider {
     fn build_headers(&self, ctx: &CallContext) -> anyhow::Result<HeaderMap> {
         let config = self.token_manager.config();
 
-        let machine_id = machine_id::generate_from_credentials(&ctx.credentials, config)
+        let machine_id = machine_id::generate_from_credentials(&ctx.credentials, &config)
             .ok_or_else(|| anyhow::anyhow!("无法生成 machine_id，请检查凭证配置"))?;
 
         let kiro_version = &config.kiro_version;
@@ -171,27 +180,32 @@ impl KiroProvider {
             HeaderValue::from_static("true"),
         );
         headers.insert("x-amzn-kiro-agent-mode", HeaderValue::from_static("vibe"));
-        headers.insert(
-            "x-amz-user-agent",
-            HeaderValue::from_str(&x_amz_user_agent).unwrap(),
-        );
-        headers.insert(
-            reqwest::header::USER_AGENT,
-            HeaderValue::from_str(&user_agent).unwrap(),
-        );
-        headers.insert(HOST, HeaderValue::from_str(&self.base_domain_for(&ctx.credentials)).unwrap());
-        headers.insert(
-            "amz-sdk-invocation-id",
-            HeaderValue::from_str(&Uuid::new_v4().to_string()).unwrap(),
-        );
+
+        // 安全构建 header values，避免 panic
+        let x_amz_user_agent_value = HeaderValue::from_str(&x_amz_user_agent)
+            .unwrap_or_else(|_| HeaderValue::from_static("unknown"));
+        headers.insert("x-amz-user-agent", x_amz_user_agent_value);
+
+        let user_agent_value = HeaderValue::from_str(&user_agent)
+            .unwrap_or_else(|_| HeaderValue::from_static("kiro-rs/1.0"));
+        headers.insert(reqwest::header::USER_AGENT, user_agent_value);
+
+        let host_value = HeaderValue::from_str(&self.base_domain_for(&ctx.credentials))
+            .unwrap_or_else(|_| HeaderValue::from_static("api.anthropic.com"));
+        headers.insert(HOST, host_value);
+
+        let invocation_id = HeaderValue::from_str(&Uuid::new_v4().to_string())
+            .unwrap_or_else(|_| HeaderValue::from_static("00000000-0000-0000-0000-000000000000"));
+        headers.insert("amz-sdk-invocation-id", invocation_id);
+
         headers.insert(
             "amz-sdk-request",
             HeaderValue::from_static("attempt=1; max=3"),
         );
-        headers.insert(
-            AUTHORIZATION,
-            HeaderValue::from_str(&format!("Bearer {}", ctx.token)).unwrap(),
-        );
+
+        let auth_value = HeaderValue::from_str(&format!("Bearer {}", ctx.token))
+            .unwrap_or_else(|_| HeaderValue::from_static("Bearer invalid"));
+        headers.insert(AUTHORIZATION, auth_value);
         headers.insert(CONNECTION, HeaderValue::from_static("close"));
 
         Ok(headers)
@@ -201,7 +215,7 @@ impl KiroProvider {
     fn build_mcp_headers(&self, ctx: &CallContext) -> anyhow::Result<HeaderMap> {
         let config = self.token_manager.config();
 
-        let machine_id = machine_id::generate_from_credentials(&ctx.credentials, config)
+        let machine_id = machine_id::generate_from_credentials(&ctx.credentials, &config)
             .ok_or_else(|| anyhow::anyhow!("无法生成 machine_id，请检查凭证配置"))?;
 
         let kiro_version = &config.kiro_version;
@@ -217,26 +231,34 @@ impl KiroProvider {
 
         let mut headers = HeaderMap::new();
 
-        // 按照严格顺序添加请求头
+        // 按照严格顺序添加请求头，使用安全的 header 构建
         headers.insert("content-type", HeaderValue::from_static("application/json"));
-        headers.insert(
-            "x-amz-user-agent",
-            HeaderValue::from_str(&x_amz_user_agent).unwrap(),
-        );
-        headers.insert("user-agent", HeaderValue::from_str(&user_agent).unwrap());
-        headers.insert("host", HeaderValue::from_str(&self.base_domain_for(&ctx.credentials)).unwrap());
-        headers.insert(
-            "amz-sdk-invocation-id",
-            HeaderValue::from_str(&Uuid::new_v4().to_string()).unwrap(),
-        );
+
+        let x_amz_user_agent_value = HeaderValue::from_str(&x_amz_user_agent)
+            .unwrap_or_else(|_| HeaderValue::from_static("unknown"));
+        headers.insert("x-amz-user-agent", x_amz_user_agent_value);
+
+        let user_agent_value = HeaderValue::from_str(&user_agent)
+            .unwrap_or_else(|_| HeaderValue::from_static("kiro-rs/1.0"));
+        headers.insert("user-agent", user_agent_value);
+
+        let host_value = HeaderValue::from_str(&self.base_domain_for(&ctx.credentials))
+            .unwrap_or_else(|_| HeaderValue::from_static("api.anthropic.com"));
+        headers.insert("host", host_value);
+
+        let invocation_id = HeaderValue::from_str(&Uuid::new_v4().to_string())
+            .unwrap_or_else(|_| HeaderValue::from_static("00000000-0000-0000-0000-000000000000"));
+        headers.insert("amz-sdk-invocation-id", invocation_id);
+
         headers.insert(
             "amz-sdk-request",
             HeaderValue::from_static("attempt=1; max=3"),
         );
-        headers.insert(
-            "Authorization",
-            HeaderValue::from_str(&format!("Bearer {}", ctx.token)).unwrap(),
-        );
+
+        let auth_value = HeaderValue::from_str(&format!("Bearer {}", ctx.token))
+            .unwrap_or_else(|_| HeaderValue::from_static("Bearer invalid"));
+        headers.insert("Authorization", auth_value);
+
         headers.insert("Connection", HeaderValue::from_static("close"));
 
         Ok(headers)
@@ -334,7 +356,8 @@ impl KiroProvider {
                     );
                     last_error = Some(e.into());
                     if attempt + 1 < max_retries {
-                        sleep(Self::retry_delay(attempt)).await;
+                        // 网络错误使用快速重试
+                        sleep(Self::fast_retry_delay(attempt)).await;
                     }
                     continue;
                 }
@@ -348,7 +371,8 @@ impl KiroProvider {
                 return Ok(response);
             }
 
-            // 失败响应
+            // 失败响应：先提取 Retry-After header（在消耗 response 之前）
+            let retry_after = Self::extract_retry_after(&response);
             let body = response.text().await.unwrap_or_default();
 
             // 402 额度用尽
@@ -387,7 +411,13 @@ impl KiroProvider {
                 );
                 last_error = Some(anyhow::anyhow!("MCP 请求失败: {} {}", status, body));
                 if attempt + 1 < max_retries {
-                    sleep(Self::retry_delay(attempt)).await;
+                    // 429 使用 Retry-After，其他使用指数退避
+                    let delay = if status.as_u16() == 429 {
+                        retry_after.unwrap_or_else(|| Duration::from_secs(60))
+                    } else {
+                        Self::retry_delay(attempt)
+                    };
+                    sleep(delay).await;
                 }
                 continue;
             }
@@ -468,7 +498,8 @@ impl KiroProvider {
                     // （否则一段时间网络抖动会把所有凭据都误禁用，需要重启才能恢复）
                     last_error = Some(e.into());
                     if attempt + 1 < max_retries {
-                        sleep(Self::retry_delay(attempt)).await;
+                        // 网络错误使用快速重试
+                        sleep(Self::fast_retry_delay(attempt)).await;
                     }
                     continue;
                 }
@@ -482,7 +513,8 @@ impl KiroProvider {
                 return Ok(response);
             }
 
-            // 失败响应：读取 body 用于日志/错误信息
+            // 失败响应：先提取 Retry-After header（在消耗 response 之前）
+            let retry_after = Self::extract_retry_after(&response);
             let body = response.text().await.unwrap_or_default();
 
             // 402 Payment Required 且额度用尽：禁用凭据并故障转移
@@ -565,7 +597,13 @@ impl KiroProvider {
                     body
                 ));
                 if attempt + 1 < max_retries {
-                    sleep(Self::retry_delay(attempt)).await;
+                    // 429 使用 Retry-After，其他使用指数退避
+                    let delay = if status.as_u16() == 429 {
+                        retry_after.unwrap_or_else(|| Duration::from_secs(60))
+                    } else {
+                        Self::retry_delay(attempt)
+                    };
+                    sleep(delay).await;
                 }
                 continue;
             }
@@ -604,6 +642,12 @@ impl KiroProvider {
         }))
     }
 
+    /// 计算重试延迟
+    ///
+    /// 根据错误类型和响应头调整重试策略：
+    /// - 429: 使用 Retry-After header（如果有）
+    /// - 5xx: 指数退避
+    /// - 网络超时: 快速重试
     fn retry_delay(attempt: usize) -> Duration {
         // 指数退避 + 少量抖动，避免上游抖动时放大故障
         const BASE_MS: u64 = 200;
@@ -613,6 +657,32 @@ impl KiroProvider {
         let jitter_max = (backoff / 4).max(1);
         let jitter = fastrand::u64(0..=jitter_max);
         Duration::from_millis(backoff.saturating_add(jitter))
+    }
+
+    /// 计算快速重试延迟（用于网络超时等瞬态错误）
+    fn fast_retry_delay(attempt: usize) -> Duration {
+        const BASE_MS: u64 = 50;
+        const MAX_MS: u64 = 500;
+        let exp = BASE_MS.saturating_mul(2u64.saturating_pow(attempt.min(4) as u32));
+        let backoff = exp.min(MAX_MS);
+        Duration::from_millis(backoff)
+    }
+
+    /// 从响应中提取 Retry-After 延迟
+    fn extract_retry_after(response: &reqwest::Response) -> Option<Duration> {
+        response
+            .headers()
+            .get("retry-after")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| {
+                // 尝试解析为秒数
+                if let Ok(seconds) = s.parse::<u64>() {
+                    Some(Duration::from_secs(seconds))
+                } else {
+                    // 尝试解析为 HTTP 日期格式（暂不实现，返回 None）
+                    None
+                }
+            })
     }
 
     fn is_monthly_request_limit(body: &str) -> bool {

@@ -1,12 +1,14 @@
 //! Anthropic API Handler 函数
 
 use std::convert::Infallible;
+use std::time::Instant;
 
 use anyhow::Error;
 use crate::cache::{CachedResponse, generate_cache_key};
 use crate::kiro::model::events::Event;
 use crate::kiro::model::requests::kiro::KiroRequest;
 use crate::kiro::parser::decoder::EventStreamDecoder;
+use crate::metrics;
 use crate::token;
 use axum::{
     Json as JsonExtractor,
@@ -178,8 +180,11 @@ pub async fn get_models() -> impl IntoResponse {
 /// 创建消息（对话）
 pub async fn post_messages(
     State(state): State<AppState>,
-    JsonExtractor(mut payload): JsonExtractor<MessagesRequest>,
+    JsonExtractor(payload): JsonExtractor<MessagesRequest>,
 ) -> Response {
+    let start_time = Instant::now();
+    metrics::ACTIVE_REQUESTS.inc();
+
     tracing::info!(
         model = %payload.model,
         max_tokens = %payload.max_tokens,
@@ -187,6 +192,23 @@ pub async fn post_messages(
         message_count = %payload.messages.len(),
         "Received POST /v1/messages request"
     );
+
+    let model = payload.model.clone();
+    let response = post_messages_impl(state, payload).await;
+
+    let duration = start_time.elapsed().as_secs_f64();
+    metrics::REQUEST_DURATION
+        .with_label_values(&["/v1/messages", &model])
+        .observe(duration);
+    metrics::ACTIVE_REQUESTS.dec();
+
+    response
+}
+
+async fn post_messages_impl(
+    state: AppState,
+    mut payload: MessagesRequest,
+) -> Response {
 
     // 生成缓存 Key
     let cache_key = generate_cache_key(&payload);
@@ -221,6 +243,9 @@ pub async fn post_messages(
         Some(p) => p.clone(),
         None => {
             tracing::error!("KiroProvider 未配置");
+            metrics::ERROR_TOTAL
+                .with_label_values(&["provider_unavailable", "/v1/messages"])
+                .inc();
             return (
                 StatusCode::SERVICE_UNAVAILABLE,
                 Json(ErrorResponse::new(

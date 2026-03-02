@@ -11,7 +11,7 @@ use super::{
     types::{
         AddCredentialRequest, AuthClaimRequest, AuthStartRequest, SetDisabledRequest,
         SetLoadBalancingModeRequest, SetPriorityRequest, SuccessResponse,
-        UpdateGlobalProxyRequest, UpdateProxyRequest,
+        UpdateGlobalProxyRequest, UpdateProxyRequest, UpdateRedisCacheConfigRequest,
     },
 };
 
@@ -182,7 +182,25 @@ pub async fn claim_auth(
     }
 }
 
-/// GET /api/admin/config/proxy
+/// GET /api/admin/config/redis-cache
+/// 获取 Redis 缓存配置
+pub async fn get_redis_cache_config(State(state): State<AdminState>) -> impl IntoResponse {
+    let response = state.service.get_redis_cache_config();
+    Json(response)
+}
+
+/// PUT /api/admin/config/redis-cache
+/// 更新 Redis 缓存配置
+pub async fn update_redis_cache_config(
+    State(state): State<AdminState>,
+    Json(payload): Json<UpdateRedisCacheConfigRequest>,
+) -> impl IntoResponse {
+    match state.service.update_redis_cache_config(payload) {
+        Ok(response) => Json(response).into_response(),
+        Err(e) => (e.status_code(), Json(e.into_response())).into_response(),
+    }
+}
+
 /// 获取全局代理配置
 pub async fn get_global_proxy(State(state): State<AdminState>) -> impl IntoResponse {
     let response = state.service.get_global_proxy();
@@ -197,6 +215,15 @@ pub async fn update_global_proxy(
 ) -> impl IntoResponse {
     match state.service.update_global_proxy(payload) {
         Ok(_) => Json(SuccessResponse::new("全局代理配置已更新")).into_response(),
+        Err(e) => (e.status_code(), Json(e.into_response())).into_response(),
+    }
+}
+
+/// GET /api/admin/cache/stats
+/// 获取缓存统计信息
+pub async fn get_cache_stats(State(state): State<AdminState>) -> impl IntoResponse {
+    match state.service.get_cache_stats(state.cache.as_ref()).await {
+        Ok(response) => Json(response).into_response(),
         Err(e) => (e.status_code(), Json(e.into_response())).into_response(),
     }
 }

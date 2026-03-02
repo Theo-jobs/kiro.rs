@@ -2,6 +2,70 @@
 
 use serde::{Deserialize, Serialize};
 
+// ============ 缓存统计 ============
+
+/// 缓存统计响应
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CacheStatsResponse {
+    /// 是否启用缓存
+    pub enabled: bool,
+    /// Redis 运行时间（秒）
+    pub uptime_seconds: u64,
+    /// 缓存 Key 总数
+    pub total_keys: u64,
+    /// 缓存命中次数
+    pub hits: u64,
+    /// 缓存未命中次数
+    pub misses: u64,
+    /// 命中率（0-100）
+    pub hit_rate: f64,
+    /// Redis 内存使用（字节）
+    pub memory_used: u64,
+    /// Redis 内存使用（人类可读）
+    pub memory_used_human: String,
+    /// 总连接数
+    pub total_connections: u64,
+    /// 总命令数
+    pub total_commands: u64,
+    /// 过期 Key 数量
+    pub expired_keys: u64,
+    /// 驱逐 Key 数量
+    pub evicted_keys: u64,
+    /// 最近的缓存 Key 样本（最多 5 个）
+    pub recent_keys: Vec<CacheKeyInfo>,
+}
+
+/// 缓存 Key 信息
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CacheKeyInfo {
+    /// Key 名称
+    pub key: String,
+    /// TTL（秒），-1 表示永久，-2 表示不存在
+    pub ttl: i64,
+}
+
+/// Redis 缓存配置响应
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RedisCacheConfigResponse {
+    /// 是否启用 Redis 缓存
+    pub enabled: bool,
+    /// Redis URL
+    pub redis_url: Option<String>,
+}
+
+/// 更新 Redis 缓存配置请求
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateRedisCacheConfigRequest {
+    /// 是否启用 Redis 缓存
+    pub enabled: bool,
+    /// Redis URL（可选）
+    pub redis_url: Option<String>,
+}
+
 // ============ 凭据状态 ============
 
 /// 所有凭据状态响应

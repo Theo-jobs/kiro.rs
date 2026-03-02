@@ -9,3 +9,4 @@ pub mod kiro;
 pub mod model;
 pub mod token;
 pub mod http_client;
+pub mod metrics;

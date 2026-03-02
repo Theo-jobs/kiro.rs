@@ -13,6 +13,9 @@ use crate::anthropic::types::{
 use crate::http_client::{ProxyConfig, build_client};
 use crate::model::config::TlsBackend;
 use std::sync::OnceLock;
+use moka::future::Cache;
+use std::time::Duration;
+use sha2::{Sha256, Digest};
 
 /// Count Tokens API 配置
 #[derive(Clone, Default)]
@@ -31,6 +34,51 @@ pub struct CountTokensConfig {
 
 /// 全局配置存储
 static COUNT_TOKENS_CONFIG: OnceLock<CountTokensConfig> = OnceLock::new();
+
+/// Token 计算缓存
+/// Key: 请求内容的 SHA256 hash
+/// Value: token 估算结果
+/// 缓存大小: 1000 条
+/// TTL: 5 分钟
+static TOKEN_CACHE: OnceLock<Cache<String, u64>> = OnceLock::new();
+
+/// 获取或初始化 token 缓存
+fn get_token_cache() -> &'static Cache<String, u64> {
+    TOKEN_CACHE.get_or_init(|| {
+        Cache::builder()
+            .max_capacity(1000)
+            .time_to_live(Duration::from_secs(300))
+            .build()
+    })
+}
+
+/// 计算请求内容的 hash 作为缓存 key
+fn compute_cache_key(
+    model: &str,
+    system: &Option<Vec<SystemMessage>>,
+    messages: &[Message],
+    tools: &Option<Vec<Tool>>,
+) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(model.as_bytes());
+
+    if let Some(sys) = system {
+        for msg in sys {
+            hasher.update(msg.text.as_bytes());
+        }
+    }
+
+    for msg in messages {
+        hasher.update(serde_json::to_string(&msg.content).unwrap_or_default().as_bytes());
+    }
+
+    if let Some(t) = tools {
+        hasher.update(serde_json::to_string(t).unwrap_or_default().as_bytes());
+    }
+
+    format!("{:x}", hasher.finalize())
+}
+
 
 /// 初始化 count_tokens 配置
 ///
@@ -105,36 +153,58 @@ pub fn count_tokens(text: &str) -> u64 {
 /// 估算请求的输入 tokens
 ///
 /// 优先调用远程 API，失败时回退到本地计算
+/// 使用 LRU 缓存提升性能
 pub(crate) fn count_all_tokens(
     model: String,
     system: Option<Vec<SystemMessage>>,
     messages: Vec<Message>,
     tools: Option<Vec<Tool>>,
 ) -> u64 {
+    // 计算缓存 key
+    let cache_key = compute_cache_key(&model, &system, &messages, &tools);
+    let cache = get_token_cache();
+
+    // 检查缓存
+    if let Some(cached) = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(cache.get(&cache_key))
+    }) {
+        tracing::debug!("Token 计算命中缓存: {}", cached);
+        return cached;
+    }
+
     // 检查是否配置了远程 API
-    if let Some(config) = get_config() {
+    let result = if let Some(config) = get_config() {
         if let Some(api_url) = &config.api_url {
             // 尝试调用远程 API
             let result = tokio::task::block_in_place(|| {
                 tokio::runtime::Handle::current().block_on(call_remote_count_tokens(
-                    api_url, config, model, &system, &messages, &tools,
+                    api_url, config, model.clone(), &system, &messages, &tools,
                 ))
             });
 
             match result {
                 Ok(tokens) => {
                     tracing::debug!("远程 count_tokens API 返回: {}", tokens);
-                    return tokens;
+                    tokens
                 }
                 Err(e) => {
                     tracing::warn!("远程 count_tokens API 调用失败，回退到本地计算: {}", e);
+                    count_all_tokens_local(system.clone(), messages.clone(), tools.clone())
                 }
             }
+        } else {
+            count_all_tokens_local(system.clone(), messages.clone(), tools.clone())
         }
-    }
+    } else {
+        count_all_tokens_local(system.clone(), messages.clone(), tools.clone())
+    };
 
-    // 本地计算
-    count_all_tokens_local(system, messages, tools)
+    // 写入缓存
+    tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(cache.insert(cache_key, result))
+    });
+
+    result
 }
 
 /// 调用远程 count_tokens API

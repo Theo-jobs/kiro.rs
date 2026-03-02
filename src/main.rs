@@ -5,17 +5,87 @@ mod cache;
 mod common;
 mod http_client;
 mod kiro;
+mod metrics;
 mod model;
 pub mod token;
 
 use std::sync::Arc;
 
+use axum::routing::get;
 use clap::Parser;
 use kiro::model::credentials::{CredentialsConfig, KiroCredentials};
 use kiro::provider::KiroProvider;
 use kiro::token_manager::MultiTokenManager;
 use model::arg::Args;
 use model::config::Config;
+
+/// 连接预热：为每个可用凭据发送 HEAD 请求
+async fn warm_connections(
+    token_manager: Arc<MultiTokenManager>,
+    proxy_config: Option<http_client::ProxyConfig>,
+    tls_backend: model::config::TlsBackend,
+) {
+    tracing::info!("开始连接预热...");
+
+    let client = match http_client::build_client(proxy_config.as_ref(), 30, tls_backend) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!("预热失败：无法创建 HTTP 客户端: {}", e);
+            return;
+        }
+    };
+
+    let snapshot = token_manager.snapshot();
+    let total = snapshot.total;
+    let mut success_count = 0;
+    let mut failed_count = 0;
+
+    for entry in snapshot.entries.iter() {
+        if entry.disabled {
+            tracing::debug!("跳过已禁用凭据 #{}", entry.id);
+            continue;
+        }
+
+        let url = "https://api.anthropic.com/v1/models";
+        match client.head(url).send().await {
+            Ok(resp) => {
+                if resp.status().is_success() || resp.status().as_u16() == 401 {
+                    // 401 也算成功，说明连接已建立
+                    success_count += 1;
+                    tracing::debug!("凭据 #{} 预热成功", entry.id);
+                } else {
+                    failed_count += 1;
+                    tracing::warn!("凭据 #{} 预热失败: HTTP {}", entry.id, resp.status());
+                }
+            }
+            Err(e) => {
+                failed_count += 1;
+                tracing::warn!("凭据 #{} 预热失败: {}", entry.id, e);
+            }
+        }
+    }
+
+    tracing::info!(
+        "连接预热完成: 总计 {} 个凭据，成功 {}，失败 {}",
+        total,
+        success_count,
+        failed_count
+    );
+}
+
+/// Prometheus Metrics 端点处理器
+async fn metrics_handler() -> (axum::http::StatusCode, String) {
+    match metrics::export_metrics() {
+        Ok(metrics) => (axum::http::StatusCode::OK, metrics),
+        Err(e) => {
+            tracing::error!("导出 Prometheus 指标失败: {}", e);
+            (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Error exporting metrics: {}", e),
+            )
+        }
+    }
+}
 
 #[tokio::main]
 async fn main() {
@@ -124,12 +194,45 @@ async fn main() {
         None
     };
 
+    // 启动缓存指标更新任务
+    if let Some(cache_ref) = &cache {
+        let cache_clone = cache_ref.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(10));
+            loop {
+                interval.tick().await;
+                let hits = cache_clone.get_hits();
+                let misses = cache_clone.get_misses();
+                metrics::update_cache_hit_rate(hits, misses);
+            }
+        });
+    }
+
+    // 启动凭据状态指标更新任务
+    {
+        let token_manager_clone = token_manager.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(10));
+            loop {
+                interval.tick().await;
+                let snapshot = token_manager_clone.snapshot();
+                for entry in snapshot.entries.iter() {
+                    let status = if entry.disabled { 0.0 } else { 1.0 };
+                    let auth_method = entry.auth_method.as_deref().unwrap_or("unknown");
+                    metrics::CREDENTIAL_STATUS
+                        .with_label_values(&[&entry.id.to_string(), auth_method])
+                        .set(status);
+                }
+            }
+        });
+    }
+
     // 构建 Anthropic API 路由（从第一个凭据获取 profile_arn）
     let anthropic_app = anthropic::create_router_with_provider(
         &api_key,
         Some(kiro_provider),
         first_credentials.profile_arn.clone(),
-        cache,
+        cache.clone(),
     );
 
     // 构建 Admin API 路由（如果配置了非空的 admin_api_key）
@@ -152,7 +255,7 @@ async fn main() {
                 });
             let oidc_client = kiro::oidc::OidcClient::new(http_client, &config.kiro_version);
             let admin_service = admin::AdminService::new(token_manager.clone(), oidc_client);
-            let admin_state = admin::AdminState::new(admin_key, admin_service);
+            let admin_state = admin::AdminState::new(admin_key, admin_service, cache.clone());
             let admin_app = admin::create_admin_router(admin_state);
 
             // 创建 Admin UI 路由
@@ -168,6 +271,9 @@ async fn main() {
         anthropic_app
     };
 
+    // 添加 /metrics 端点
+    let app = app.route("/metrics", get(metrics_handler));
+
     // 启动服务器
     let addr = format!("{}:{}", config.host, config.port);
     tracing::info!("启动 Anthropic API 端点: {}", addr);
@@ -176,6 +282,7 @@ async fn main() {
     tracing::info!("  GET  /v1/models");
     tracing::info!("  POST /v1/messages");
     tracing::info!("  POST /v1/messages/count_tokens");
+    tracing::info!("  GET  /metrics");
     if admin_key_valid {
         tracing::info!("Admin API:");
         tracing::info!("  GET  /api/admin/credentials");
@@ -187,6 +294,22 @@ async fn main() {
         tracing::info!("  GET  /admin");
     }
 
-    let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
-    axum::serve(listener, app).await.unwrap();
+    // 连接预热
+    warm_connections(token_manager.clone(), proxy_config.clone(), config.tls_backend).await;
+
+    // 绑定监听地址
+    let listener = match tokio::net::TcpListener::bind(&addr).await {
+        Ok(l) => l,
+        Err(e) => {
+            tracing::error!("无法绑定地址 {}: {}", addr, e);
+            tracing::error!("可能原因：端口已被占用或权限不足");
+            std::process::exit(1);
+        }
+    };
+
+    // 启动服务
+    if let Err(e) = axum::serve(listener, app).await {
+        tracing::error!("服务运行失败: {}", e);
+        std::process::exit(1);
+    }
 }

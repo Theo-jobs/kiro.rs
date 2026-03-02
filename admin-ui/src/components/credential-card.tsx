@@ -238,6 +238,10 @@ export function CredentialCard({
               <span className="text-muted-foreground">成功次数：</span>
               <span className="font-medium">{credential.successCount}</span>
             </div>
+            <div>
+              <span className="text-muted-foreground">区域：</span>
+              <span className="font-medium">{credential.region || 'us-east-1'}</span>
+            </div>
             <div className="col-span-2">
               <span className="text-muted-foreground">最后调用：</span>
               <span className="font-medium">{formatLastUsed(credential.lastUsedAt)}</span>

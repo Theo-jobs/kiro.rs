@@ -451,6 +451,9 @@ pub struct CredentialEntrySnapshot {
     pub refresh_token_hash: Option<String>,
     /// 用户邮箱（用于前端显示）
     pub email: Option<String>,
+    /// 凭据区域（未配置时前端默认展示 us-east-1）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub region: Option<String>,
     /// API 调用成功次数
     pub success_count: u64,
     /// 最后一次 API 调用时间（RFC3339 格式）
@@ -492,7 +495,7 @@ const USAGE_LIMITS_CACHE_TTL: StdDuration = StdDuration::from_secs(300);
 /// 支持多个凭据的管理，实现固定优先级 + 故障转移策略
 /// 故障统计基于 API 调用结果，而非 Token 刷新结果
 pub struct MultiTokenManager {
-    config: Config,
+    config: Arc<Mutex<Config>>,
     proxy: Option<ProxyConfig>,
     /// 凭据条目列表
     entries: Mutex<Vec<CredentialEntry>>,
@@ -613,7 +616,7 @@ impl MultiTokenManager {
 
         let load_balancing_mode = config.load_balancing_mode.clone();
         let manager = Self {
-            config,
+            config: Arc::new(Mutex::new(config)),
             proxy,
             entries: Mutex::new(entries),
             current_id: Mutex::new(initial_id),
@@ -651,8 +654,8 @@ impl MultiTokenManager {
     }
 
     /// 获取配置的引用
-    pub fn config(&self) -> &Config {
-        &self.config
+    pub fn config(&self) -> Config {
+        self.config.lock().clone()
     }
 
     /// 获取当前活动凭据的克隆
@@ -904,8 +907,9 @@ impl MultiTokenManager {
             if is_token_expired(&current_creds) || is_token_expiring_soon(&current_creds) {
                 // 确实需要刷新
                 let effective_proxy = current_creds.effective_proxy(self.proxy.as_ref());
+                let config = self.config.lock().clone();
                 let new_creds =
-                    refresh_token(&current_creds, &self.config, effective_proxy.as_ref()).await?;
+                    refresh_token(&current_creds, &config, effective_proxy.as_ref()).await?;
 
                 if is_token_expired(&new_creds) {
                     anyhow::bail!("刷新后的 Token 仍然无效或已过期");
@@ -1272,9 +1276,10 @@ impl MultiTokenManager {
     pub async fn get_usage_limits(&self) -> anyhow::Result<UsageLimitsResponse> {
         let ctx = self.acquire_context(None).await?;
         let effective_proxy = ctx.credentials.effective_proxy(self.proxy.as_ref());
+        let config = self.config.lock().clone();
         get_usage_limits(
             &ctx.credentials,
-            &self.config,
+            &config,
             &ctx.token,
             effective_proxy.as_ref(),
         )
@@ -1310,6 +1315,7 @@ impl MultiTokenManager {
                     expires_at: e.credentials.expires_at.clone(),
                     refresh_token_hash: e.credentials.refresh_token.as_deref().map(sha256_hex),
                     email: e.credentials.email.clone(),
+                    region: e.credentials.region.clone(),
                     success_count: e.success_count,
                     last_used_at: e.last_used_at.clone(),
                     has_proxy: e.credentials.proxy_url.is_some(),
@@ -1435,7 +1441,8 @@ impl MultiTokenManager {
         }).await?;
 
         let effective_proxy = credentials.effective_proxy(self.proxy.as_ref());
-        let usage_limits = get_usage_limits(&credentials, &self.config, &token, effective_proxy.as_ref()).await?;
+        let config = self.config.lock().clone();
+        let usage_limits = get_usage_limits(&credentials, &config, &token, effective_proxy.as_ref()).await?;
 
         // 更新缓存
         {
@@ -1526,8 +1533,9 @@ impl MultiTokenManager {
 
         // 3. 尝试刷新 Token 验证凭据有效性
         let effective_proxy = new_cred.effective_proxy(self.proxy.as_ref());
+        let config = self.config.lock().clone();
         let mut validated_cred =
-            refresh_token(&new_cred, &self.config, effective_proxy.as_ref()).await?;
+            refresh_token(&new_cred, &config, effective_proxy.as_ref()).await?;
 
         // 4. 分配新 ID
         let new_id = {
@@ -1662,11 +1670,14 @@ impl MultiTokenManager {
     fn persist_load_balancing_mode(&self, mode: &str) -> anyhow::Result<()> {
         use anyhow::Context;
 
-        let config_path = match self.config.config_path() {
-            Some(path) => path.to_path_buf(),
-            None => {
-                tracing::warn!("配置文件路径未知，负载均衡模式仅在当前进程生效: {}", mode);
-                return Ok(());
+        let config_path = {
+            let config = self.config.lock();
+            match config.config_path() {
+                Some(path) => path.to_path_buf(),
+                None => {
+                    tracing::warn!("配置文件路径未知，负载均衡模式仅在当前进程生效: {}", mode);
+                    return Ok(());
+                }
             }
         };
 
@@ -1720,22 +1731,95 @@ impl MultiTokenManager {
         });
 
         // 读取配置文件
-        let config_path = self
-            .config
-            .config_path()
-            .ok_or_else(|| anyhow::anyhow!("配置文件路径未知"))?;
+        let config_path = {
+            let config = self.config.lock();
+            config
+                .config_path()
+                .ok_or_else(|| anyhow::anyhow!("配置文件路径未知"))?
+                .to_path_buf()
+        };
 
-        let mut config = Config::load(config_path)?;
+        let mut config = Config::load(&config_path)?;
 
         // 更新代理配置
-        config.proxy_url = proxy_url;
-        config.proxy_username = proxy_username;
-        config.proxy_password = proxy_password;
+        config.proxy_url = proxy_url.clone();
+        config.proxy_username = proxy_username.clone();
+        config.proxy_password = proxy_password.clone();
 
         // 持久化到 config.json
         config.save()?;
 
+        // 更新内存中的配置
+        {
+            let mut current_config = self.config.lock();
+            current_config.proxy_url = proxy_url;
+            current_config.proxy_username = proxy_username;
+            current_config.proxy_password = proxy_password;
+        }
+
         tracing::info!("全局代理配置已更新");
+        Ok(())
+    }
+
+    /// 更新 Redis 缓存配置
+    pub fn update_redis_cache_config(
+        &self,
+        enabled: bool,
+        redis_url: Option<String>,
+    ) -> anyhow::Result<()> {
+        // 读取配置文件
+        let config_path = {
+            let config = self.config.lock();
+            config
+                .config_path()
+                .ok_or_else(|| anyhow::anyhow!("配置文件路径未知"))?
+                .to_path_buf()
+        };
+
+        let mut config = Config::load(&config_path)?;
+
+        // 更新缓存配置
+        if let Some(cache_config) = config.cache.as_mut() {
+            cache_config.enabled = enabled;
+            if let Some(url) = redis_url.clone() {
+                cache_config.redis_url = url;
+            }
+        } else if enabled {
+            // 如果之前没有缓存配置，创建一个新的（使用默认值）
+            config.cache = Some(crate::cache::config::CacheConfig {
+                enabled,
+                redis_url: redis_url.clone().unwrap_or_else(|| "redis://127.0.0.1:6379".to_string()),
+                ttl_seconds: 300,
+                password: None,
+                db: Some(0),
+                blacklist_patterns: vec![],
+            });
+        }
+
+        // 持久化到 config.json
+        config.save()?;
+
+        // 更新内存中的配置
+        {
+            let mut current_config = self.config.lock();
+            if let Some(cache_config) = current_config.cache.as_mut() {
+                cache_config.enabled = enabled;
+                if let Some(url) = redis_url {
+                    cache_config.redis_url = url;
+                }
+            } else if enabled {
+                current_config.cache = Some(crate::cache::config::CacheConfig {
+                    enabled,
+                    redis_url: redis_url.unwrap_or_else(|| "redis://127.0.0.1:6379".to_string()),
+                    ttl_seconds: 300,
+                    password: None,
+                    db: Some(0),
+                    blacklist_patterns: vec![],
+                });
+            }
+        }
+
+        tracing::info!("Redis 缓存配置已更新: enabled={}", enabled);
         Ok(())
     }
 }

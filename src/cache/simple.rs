@@ -6,14 +6,18 @@ use redis::aio::ConnectionManager;
 use redis::{AsyncCommands, Client};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 /// Redis 缓存管理器
 pub struct SimpleCache {
-    client: Client,
     pool: ConnectionManager,
     config: Arc<CacheConfig>,
     blacklist_regexes: Vec<Regex>,
+    /// 应用层缓存命中计数
+    hits: Arc<AtomicU64>,
+    /// 应用层缓存未命中计数
+    misses: Arc<AtomicU64>,
 }
 
 /// 缓存的响应数据
@@ -60,11 +64,17 @@ impl SimpleCache {
             .collect();
 
         Ok(Self {
-            client,
             pool,
             config: Arc::new(config),
             blacklist_regexes,
+            hits: Arc::new(AtomicU64::new(0)),
+            misses: Arc::new(AtomicU64::new(0)),
         })
+    }
+
+    /// 获取 Redis 连接（用于 Admin API）
+    pub async fn get_connection(&self) -> Result<ConnectionManager> {
+        Ok(self.pool.clone())
     }
 
     /// 检查请求是否应该被缓存（黑名单过滤）
@@ -97,6 +107,7 @@ impl SimpleCache {
                 // 反序列化
                 match serde_json::from_str::<CachedResponse>(&value) {
                     Ok(cached) => {
+                        self.hits.fetch_add(1, Ordering::Relaxed);
                         tracing::debug!("缓存命中: {}", key);
                         Ok(Some(cached))
                     }
@@ -107,6 +118,7 @@ impl SimpleCache {
                 }
             }
             Ok(None) => {
+                self.misses.fetch_add(1, Ordering::Relaxed);
                 tracing::debug!("缓存未命中: {}", key);
                 Ok(None)
             }
@@ -202,12 +214,21 @@ impl SimpleCache {
             }
         }
     }
+
+    /// 获取应用层缓存命中统计
+    pub fn get_hits(&self) -> u64 {
+        self.hits.load(Ordering::Relaxed)
+    }
+
+    /// 获取应用层缓存未命中统计
+    pub fn get_misses(&self) -> u64 {
+        self.misses.load(Ordering::Relaxed)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures::FutureExt;
 
     #[tokio::test]
     async fn test_cache_config() {

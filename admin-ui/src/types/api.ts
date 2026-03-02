@@ -18,6 +18,7 @@ export interface CredentialStatusItem {
   hasProfileArn: boolean
   email?: string
   refreshTokenHash?: string
+  region?: string
   successCount: number
   lastUsedAt: string | null
   hasProxy: boolean
@@ -127,4 +128,15 @@ export interface UpdateGlobalProxyRequest {
   proxyUrl?: string | null
   proxyUsername?: string | null
   proxyPassword?: string | null
+}
+
+// Redis 缓存配置
+export interface RedisCacheConfigResponse {
+  enabled: boolean
+  redisUrl: string | null
+}
+
+export interface UpdateRedisCacheConfigRequest {
+  enabled: boolean
+  redisUrl?: string | null
 }

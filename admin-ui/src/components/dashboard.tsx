@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { RefreshCw, LogOut, Moon, Sun, Server, Plus, Upload, FileUp, Trash2, RotateCcw, CheckCircle2, LogIn, Globe } from 'lucide-react'
+import { RefreshCw, LogOut, Moon, Sun, Server, Plus, Upload, FileUp, Trash2, RotateCcw, CheckCircle2, LogIn, Globe, Database } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { storage } from '@/lib/storage'
@@ -14,6 +14,8 @@ import { KamImportDialog } from '@/components/kam-import-dialog'
 import { BatchVerifyDialog, type VerifyResult } from '@/components/batch-verify-dialog'
 import { EnterpriseLoginDialog } from '@/components/enterprise-login-dialog'
 import { GlobalProxyDialog } from '@/components/global-proxy-dialog'
+import { RedisCacheDialog } from '@/components/redis-cache-dialog'
+import { CacheStats } from '@/components/cache-stats'
 import { useCredentials, useDeleteCredential, useResetFailure, useLoadBalancingMode, useSetLoadBalancingMode } from '@/hooks/use-credentials'
 import { getCredentialBalance } from '@/api/credentials'
 import { extractErrorMessage } from '@/lib/utils'
@@ -24,6 +26,7 @@ interface DashboardProps {
 }
 
 export function Dashboard({ onLogout }: DashboardProps) {
+  const [view, setView] = useState<'credentials' | 'cache'>('credentials')
   const [selectedCredentialId, setSelectedCredentialId] = useState<number | null>(null)
   const [balanceDialogOpen, setBalanceDialogOpen] = useState(false)
   const [addDialogOpen, setAddDialogOpen] = useState(false)
@@ -31,6 +34,7 @@ export function Dashboard({ onLogout }: DashboardProps) {
   const [kamImportDialogOpen, setKamImportDialogOpen] = useState(false)
   const [enterpriseLoginDialogOpen, setEnterpriseLoginDialogOpen] = useState(false)
   const [globalProxyDialogOpen, setGlobalProxyDialogOpen] = useState(false)
+  const [redisCacheDialogOpen, setRedisCacheDialogOpen] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [verifyDialogOpen, setVerifyDialogOpen] = useState(false)
   const [verifying, setVerifying] = useState(false)
@@ -535,6 +539,23 @@ export function Dashboard({ onLogout }: DashboardProps) {
           <div className="flex items-center gap-2">
             <Server className="h-5 w-5" />
             <span className="font-semibold">Kiro Admin</span>
+            <div className="ml-4 flex gap-1">
+              <Button
+                variant={view === 'credentials' ? 'default' : 'ghost'}
+                size="sm"
+                onClick={() => setView('credentials')}
+              >
+                凭据管理
+              </Button>
+              <Button
+                variant={view === 'cache' ? 'default' : 'ghost'}
+                size="sm"
+                onClick={() => setView('cache')}
+              >
+                <Database className="h-4 w-4 mr-1" />
+                缓存统计
+              </Button>
+            </div>
           </div>
           <div className="flex items-center gap-2">
             <Button
@@ -555,6 +576,15 @@ export function Dashboard({ onLogout }: DashboardProps) {
               <Globe className="h-4 w-4 mr-1" />
               全局代理
             </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setRedisCacheDialogOpen(true)}
+              title="配置 Redis 缓存"
+            >
+              <Database className="h-4 w-4 mr-1" />
+              Redis 缓存
+            </Button>
             <Button variant="ghost" size="icon" onClick={toggleDarkMode}>
               {darkMode ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
             </Button>
@@ -570,6 +600,10 @@ export function Dashboard({ onLogout }: DashboardProps) {
 
       {/* 主内容 */}
       <main className="container mx-auto px-4 md:px-8 py-6">
+        {view === 'cache' ? (
+          <CacheStats />
+        ) : (
+          <>
         {/* 统计卡片 */}
         <div className="grid gap-4 md:grid-cols-3 mb-6">
           <Card>
@@ -741,6 +775,8 @@ export function Dashboard({ onLogout }: DashboardProps) {
             </>
           )}
         </div>
+        </>
+        )}
       </main>
 
       {/* 余额对话框 */}
@@ -788,6 +824,10 @@ export function Dashboard({ onLogout }: DashboardProps) {
       <GlobalProxyDialog
         open={globalProxyDialogOpen}
         onOpenChange={setGlobalProxyDialogOpen}
+      />
+      <RedisCacheDialog
+        open={redisCacheDialogOpen}
+        onOpenChange={setRedisCacheDialogOpen}
       />
     </div>
   )

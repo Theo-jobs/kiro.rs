@@ -15,9 +15,10 @@ use crate::kiro::token_manager::MultiTokenManager;
 use super::auth_session::{AuthSession, AuthSessionStatus, AuthSessionStore};
 use super::error::AdminServiceError;
 use super::types::{
-    AddCredentialRequest, AddCredentialResponse, BalanceResponse, CredentialStatusItem,
-    CredentialsStatusResponse, GlobalProxyResponse, LoadBalancingModeResponse,
-    SetLoadBalancingModeRequest, UpdateGlobalProxyRequest,
+    AddCredentialRequest, AddCredentialResponse, BalanceResponse, CacheKeyInfo,
+    CacheStatsResponse, CredentialStatusItem, CredentialsStatusResponse, GlobalProxyResponse,
+    LoadBalancingModeResponse, RedisCacheConfigResponse, SetLoadBalancingModeRequest,
+    UpdateGlobalProxyRequest, UpdateRedisCacheConfigRequest,
 };
 
 /// 余额缓存过期时间（秒），10 分钟
@@ -589,8 +590,8 @@ impl AdminService {
     pub fn get_global_proxy(&self) -> GlobalProxyResponse {
         let config = self.token_manager.config();
         GlobalProxyResponse {
-            proxy_url: config.proxy_url.clone(),
-            proxy_username: config.proxy_username.clone(),
+            proxy_url: config.proxy_url,
+            proxy_username: config.proxy_username,
             has_proxy_password: config.proxy_password.is_some(),
         }
     }
@@ -603,6 +604,27 @@ impl AdminService {
         self.token_manager
             .update_global_proxy(req.proxy_url, req.proxy_username, req.proxy_password)
             .map_err(|e| AdminServiceError::InternalError(e.to_string()))
+    }
+
+    /// 获取 Redis 缓存配置
+    pub fn get_redis_cache_config(&self) -> RedisCacheConfigResponse {
+        let config = self.token_manager.config();
+        RedisCacheConfigResponse {
+            enabled: config.cache.as_ref().map(|c| c.enabled).unwrap_or(false),
+            redis_url: config.cache.as_ref().map(|c| c.redis_url.clone()),
+        }
+    }
+
+    /// 更新 Redis 缓存配置
+    pub fn update_redis_cache_config(
+        &self,
+        req: UpdateRedisCacheConfigRequest,
+    ) -> Result<RedisCacheConfigResponse, AdminServiceError> {
+        self.token_manager
+            .update_redis_cache_config(req.enabled, req.redis_url)
+            .map_err(|e| AdminServiceError::InternalError(e.to_string()))?;
+
+        Ok(self.get_redis_cache_config())
     }
 
     // ============ 余额缓存持久化 ============
@@ -761,4 +783,132 @@ fn is_valid_aws_region(region: &str) -> bool {
     parts[..parts.len() - 1]
         .iter()
         .all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_lowercase()))
+}
+
+impl AdminService {
+    /// 获取缓存统计信息
+    pub async fn get_cache_stats(
+        &self,
+        cache: Option<&Arc<crate::cache::SimpleCache>>,
+    ) -> Result<CacheStatsResponse, AdminServiceError> {
+        let cache = cache.ok_or_else(|| {
+            AdminServiceError::InternalError("缓存未启用或不可用".to_string())
+        })?;
+
+        // 获取 Redis 连接
+        let mut conn = cache
+            .get_connection()
+            .await
+            .map_err(|e| AdminServiceError::InternalError(format!("Redis 连接失败: {}", e)))?;
+
+        // 获取统计信息
+        let info_stats: String = redis::cmd("INFO")
+            .arg("stats")
+            .query_async(&mut conn)
+            .await
+            .map_err(|e| {
+                AdminServiceError::InternalError(format!("获取 Redis 统计失败: {}", e))
+            })?;
+
+        let info_server: String = redis::cmd("INFO")
+            .arg("server")
+            .query_async(&mut conn)
+            .await
+            .map_err(|e| {
+                AdminServiceError::InternalError(format!("获取 Redis 服务器信息失败: {}", e))
+            })?;
+
+        let info_memory: String = redis::cmd("INFO")
+            .arg("memory")
+            .query_async(&mut conn)
+            .await
+            .map_err(|e| {
+                AdminServiceError::InternalError(format!("获取 Redis 内存信息失败: {}", e))
+            })?;
+
+        // 解析统计数据
+        let uptime_seconds = Self::parse_info_field(&info_server, "uptime_in_seconds")
+            .unwrap_or(0);
+
+        // 使用应用层缓存统计（而非 Redis keyspace 统计）
+        let hits = cache.get_hits();
+        let misses = cache.get_misses();
+
+        let total_connections =
+            Self::parse_info_field(&info_stats, "total_connections_received").unwrap_or(0);
+        let total_commands =
+            Self::parse_info_field(&info_stats, "total_commands_processed").unwrap_or(0);
+        let expired_keys = Self::parse_info_field(&info_stats, "expired_keys").unwrap_or(0);
+        let evicted_keys = Self::parse_info_field(&info_stats, "evicted_keys").unwrap_or(0);
+        let memory_used = Self::parse_info_field(&info_memory, "used_memory").unwrap_or(0);
+        let memory_used_human =
+            Self::parse_info_string(&info_memory, "used_memory_human").unwrap_or_default();
+
+        // 计算命中率
+        let total = hits + misses;
+        let hit_rate = if total > 0 {
+            (hits as f64 / total as f64) * 100.0
+        } else {
+            0.0
+        };
+
+        // 获取缓存 Key 总数
+        let total_keys: u64 = redis::cmd("DBSIZE")
+            .query_async(&mut conn)
+            .await
+            .unwrap_or(0);
+
+        // 获取最近的缓存 Key（最多 5 个）
+        let keys: Vec<String> = redis::cmd("KEYS")
+            .arg("kiro:cache:*")
+            .query_async(&mut conn)
+            .await
+            .unwrap_or_default();
+
+        let mut recent_keys = Vec::new();
+        for key in keys.iter().take(5) {
+            let ttl: i64 = redis::cmd("TTL")
+                .arg(key)
+                .query_async(&mut conn)
+                .await
+                .unwrap_or(-2);
+
+            recent_keys.push(CacheKeyInfo {
+                key: key.clone(),
+                ttl,
+            });
+        }
+
+        Ok(CacheStatsResponse {
+            enabled: true,
+            uptime_seconds,
+            total_keys,
+            hits,
+            misses,
+            hit_rate,
+            memory_used,
+            memory_used_human,
+            total_connections,
+            total_commands,
+            expired_keys,
+            evicted_keys,
+            recent_keys,
+        })
+    }
+
+    /// 解析 INFO 命令返回的字段（数字）
+    fn parse_info_field(info: &str, field: &str) -> Option<u64> {
+        info.lines()
+            .find(|line| line.starts_with(field))
+            .and_then(|line| line.split(':').nth(1))
+            .and_then(|value| value.trim().parse().ok())
+    }
+
+    /// 解析 INFO 命令返回的字段（字符串）
+    fn parse_info_string(info: &str, field: &str) -> Option<String> {
+        info.lines()
+            .find(|line| line.starts_with(field))
+            .and_then(|line| line.split(':').nth(1))
+            .map(|value| value.trim().to_string())
+    }
 }
