@@ -5,15 +5,25 @@
 # ============================================================
 set -euo pipefail
 
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+RED='\033[0;31m'
+NC='\033[0m'
+
+log()  { echo -e "${GREEN}[✓]${NC} $*"; }
+warn() { echo -e "${YELLOW}[!]${NC} $*"; }
+err()  { echo -e "${RED}[✗]${NC} $*"; exit 1; }
+
 # ---------- 配置区 ----------
 # 外网: 100.66.1.1 | 内网: 192.168.50.200
 SSH_HOST="${SSH_HOST:-192.168.50.200}"
 SSH_PORT="${SSH_PORT:-10000}"
 SSH_USER="${SSH_USER:-root}"
-# Sudo 密码（仅用于 sudo 命令，SSH 使用密钥认证）
-if [ -z "${SUDO_PASS:-}" ]; then
-    err "错误: 请设置 SUDO_PASS 环境变量"
+# SSH 和 Sudo 密码
+if [ -z "${SSH_PASS:-}" ]; then
+    err "错误: 请设置 SSH_PASS 环境变量"
 fi
+SUDO_PASS="${SUDO_PASS:-$SSH_PASS}"
 COMPOSE_DIR="${COMPOSE_DIR:-/tmp/zfsv3/nvme12/data/my_docker/kiro-rs}"
 CONFIG_DIR="${CONFIG_DIR:-/tmp/zfsv3/nvme12/data/my_docker/kiro-rs/config}"
 CONTAINER_NAME="kiro-rs"
@@ -25,30 +35,21 @@ PLATFORM="linux/amd64"
 LOCAL_TAR="/tmp/kiro-rs-image.tar"
 # -----------------------------
 
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-RED='\033[0;31m'
-NC='\033[0m'
-
-log()  { echo -e "${GREEN}[✓]${NC} $*"; }
-warn() { echo -e "${YELLOW}[!]${NC} $*"; }
-err()  { echo -e "${RED}[✗]${NC} $*"; exit 1; }
-
-# 检查 SSH 密钥认证
-if ! ssh -p "${SSH_PORT}" -o BatchMode=yes -o ConnectTimeout=5 "${SSH_USER}@${SSH_HOST}" exit 2>/dev/null; then
-    err "SSH 密钥认证失败，请先配置: ssh-copy-id -p ${SSH_PORT} ${SSH_USER}@${SSH_HOST}"
+# 检查 sshpass 是否安装
+if ! command -v sshpass &> /dev/null; then
+    err "sshpass 未安装，请先安装: brew install sshpass"
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 run_sudo() {
-    ssh -F /dev/null -o StrictHostKeyChecking=no \
+    sshpass -p "${SSH_PASS}" ssh -F /dev/null -o StrictHostKeyChecking=no \
         -p "${SSH_PORT}" "${SSH_USER}@${SSH_HOST}" \
         "echo '${SUDO_PASS}' | sudo -S bash -c \"$1\"" 2>&1
 }
 
 upload_file() {
-    scp -F /dev/null -o StrictHostKeyChecking=no \
+    sshpass -p "${SSH_PASS}" scp -F /dev/null -o StrictHostKeyChecking=no \
         -P "${SSH_PORT}" "$1" "${SSH_USER}@${SSH_HOST}:$2" 2>&1
 }
 

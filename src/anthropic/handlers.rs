@@ -219,7 +219,7 @@ async fn post_messages_impl(
         if let Some(cache) = &state.cache {
             // 检查是否应该缓存此请求
             let request_json = serde_json::to_string(&payload).unwrap_or_default();
-            if cache.should_cache(&request_json) {
+            if cache.should_cache(&request_json).await {
                 match cache.get(&cache_key).await {
                     Ok(Some(cached_response)) => {
                         tracing::info!("缓存命中，返回缓存内容");

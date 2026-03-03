@@ -195,8 +195,19 @@ pub async fn update_redis_cache_config(
     State(state): State<AdminState>,
     Json(payload): Json<UpdateRedisCacheConfigRequest>,
 ) -> impl IntoResponse {
-    match state.service.update_redis_cache_config(payload) {
-        Ok(response) => Json(response).into_response(),
+    // 更新配置文件和 TokenManager
+    match state.service.update_redis_cache_config(payload.clone()) {
+        Ok(response) => {
+            // 如果有 cache 实例，热更新其配置
+            if let Some(cache) = &state.cache {
+                if let Err(e) = cache.update_config(payload.enabled, payload.redis_url).await {
+                    tracing::warn!("热更新 Redis 缓存配置失败: {}", e);
+                } else {
+                    tracing::info!("Redis 缓存配置已热更新");
+                }
+            }
+            Json(response).into_response()
+        }
         Err(e) => (e.status_code(), Json(e.into_response())).into_response(),
     }
 }

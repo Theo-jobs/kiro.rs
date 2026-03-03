@@ -8,12 +8,13 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use tokio::sync::RwLock;
 
 /// Redis 缓存管理器
 pub struct SimpleCache {
     pool: ConnectionManager,
-    config: Arc<CacheConfig>,
-    blacklist_regexes: Vec<Regex>,
+    config: Arc<RwLock<CacheConfig>>,
+    blacklist_regexes: Arc<RwLock<Vec<Regex>>>,
     /// 应用层缓存命中计数
     hits: Arc<AtomicU64>,
     /// 应用层缓存未命中计数
@@ -65,11 +66,39 @@ impl SimpleCache {
 
         Ok(Self {
             pool,
-            config: Arc::new(config),
-            blacklist_regexes,
+            config: Arc::new(RwLock::new(config)),
+            blacklist_regexes: Arc::new(RwLock::new(blacklist_regexes)),
             hits: Arc::new(AtomicU64::new(0)),
             misses: Arc::new(AtomicU64::new(0)),
         })
+    }
+
+    /// 更新缓存配置（热更新）
+    pub async fn update_config(&self, enabled: bool, redis_url: Option<String>) -> Result<()> {
+        let mut config = self.config.write().await;
+        config.enabled = enabled;
+        if let Some(url) = redis_url {
+            config.redis_url = url;
+        }
+        tracing::info!("Redis 缓存配置已更新: enabled={}", enabled);
+        Ok(())
+    }
+
+    /// 更新黑名单模式（热更新）
+    pub async fn update_blacklist(&self, patterns: Vec<String>) -> Result<()> {
+        let regexes: Vec<Regex> = patterns
+            .iter()
+            .filter_map(|pattern| Regex::new(pattern).ok())
+            .collect();
+
+        let mut blacklist = self.blacklist_regexes.write().await;
+        *blacklist = regexes;
+
+        let mut config = self.config.write().await;
+        config.blacklist_patterns = patterns;
+
+        tracing::info!("Redis 缓存黑名单已更新");
+        Ok(())
     }
 
     /// 获取 Redis 连接（用于 Admin API）
@@ -78,13 +107,16 @@ impl SimpleCache {
     }
 
     /// 检查请求是否应该被缓存（黑名单过滤）
-    pub fn should_cache(&self, request_json: &str) -> bool {
-        if !self.config.enabled {
+    pub async fn should_cache(&self, request_json: &str) -> bool {
+        let config = self.config.read().await;
+        if !config.enabled {
             return false;
         }
+        drop(config);
 
         // 检查黑名单
-        for regex in &self.blacklist_regexes {
+        let blacklist = self.blacklist_regexes.read().await;
+        for regex in blacklist.iter() {
             if regex.is_match(request_json) {
                 tracing::debug!("请求匹配黑名单模式，跳过缓存");
                 return false;
@@ -96,9 +128,11 @@ impl SimpleCache {
 
     /// 从缓存读取
     pub async fn get(&self, key: &str) -> Result<Option<CachedResponse>> {
-        if !self.config.enabled {
+        let config = self.config.read().await;
+        if !config.enabled {
             return Ok(None);
         }
+        drop(config);
 
         let mut conn = self.pool.clone();
 
@@ -131,7 +165,8 @@ impl SimpleCache {
 
     /// 写入缓存
     pub async fn set(&self, key: &str, response: &CachedResponse) -> Result<()> {
-        if !self.config.enabled {
+        let config = self.config.read().await;
+        if !config.enabled {
             return Ok(());
         }
 
@@ -141,7 +176,8 @@ impl SimpleCache {
         let value = serde_json::to_string(response).context("序列化缓存数据失败")?;
 
         // 写入 Redis，设置 TTL
-        let ttl = self.config.ttl_seconds;
+        let ttl = config.ttl_seconds;
+        drop(config);
 
         match conn.set_ex::<_, _, ()>(key, value, ttl).await {
             Ok(_) => {
@@ -157,9 +193,11 @@ impl SimpleCache {
 
     /// 删除缓存
     pub async fn remove(&self, key: &str) -> Result<()> {
-        if !self.config.enabled {
+        let config = self.config.read().await;
+        if !config.enabled {
             return Ok(());
         }
+        drop(config);
 
         let mut conn = self.pool.clone();
 
@@ -177,9 +215,11 @@ impl SimpleCache {
 
     /// 清空所有缓存
     pub async fn clear(&self) -> Result<()> {
-        if !self.config.enabled {
+        let config = self.config.read().await;
+        if !config.enabled {
             return Ok(());
         }
+        drop(config);
 
         let mut conn = self.pool.clone();
 
@@ -243,10 +283,11 @@ mod tests {
 
         // 注意：此测试需要 Redis 服务运行
         // 如果 Redis 不可用，测试会失败
-        match SimpleCache::new(config).await {
+        match SimpleCache::new(config.clone()).await {
             Ok(cache) => {
-                assert!(cache.config.enabled);
-                assert_eq!(cache.config.ttl_seconds, 3600);
+                let config_guard = cache.config.read().await;
+                assert!(config_guard.enabled);
+                assert_eq!(config_guard.ttl_seconds, 3600);
             }
             Err(e) => {
                 // Redis 不可用时跳过测试

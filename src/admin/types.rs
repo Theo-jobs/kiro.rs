@@ -57,7 +57,7 @@ pub struct RedisCacheConfigResponse {
 }
 
 /// 更新 Redis 缓存配置请求
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateRedisCacheConfigRequest {
     /// 是否启用 Redis 缓存
