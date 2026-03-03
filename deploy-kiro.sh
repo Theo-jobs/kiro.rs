@@ -24,8 +24,8 @@ if [ -z "${SSH_PASS:-}" ]; then
     err "错误: 请设置 SSH_PASS 环境变量"
 fi
 SUDO_PASS="${SUDO_PASS:-$SSH_PASS}"
-COMPOSE_DIR="${COMPOSE_DIR:-/tmp/zfsv3/nvme12/data/my_docker/kiro-rs}"
-CONFIG_DIR="${CONFIG_DIR:-/tmp/zfsv3/nvme12/data/my_docker/kiro-rs/config}"
+COMPOSE_DIR="${COMPOSE_DIR:-/tmp/zfsv3/nvme12/18668588631/data/my_docker/kiro-rs}"
+CONFIG_DIR="${CONFIG_DIR:-/tmp/zfsv3/nvme12/18668588631/data/my_docker/kiro-rs/config}"
 CONTAINER_NAME="kiro-rs"
 IMAGE_NAME="kiro-rs"
 IMAGE_TAG="latest"
