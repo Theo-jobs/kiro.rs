@@ -581,7 +581,7 @@ impl KiroProvider {
             }
 
             // 429 INSUFFICIENT_MODEL_CAPACITY - 容量不足：立即切换凭据
-            // 这种错误说明当前账户/区域容量已满，在同一凭据上重试无意义
+            // 不等待重试，快速轮询所有凭据找到可用的
             if status.as_u16() == 429 && body.contains("INSUFFICIENT_MODEL_CAPACITY") {
                 tracing::warn!(
                     "API 请求失败（模型容量不足，立即切换凭据）: {} {}",

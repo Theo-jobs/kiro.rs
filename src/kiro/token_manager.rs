@@ -529,7 +529,7 @@ const MAX_FAILURES_PER_CREDENTIAL: u32 = 3;
 
 /// 临时禁用的冷却时间（分钟）
 /// 用于 429 INSUFFICIENT_MODEL_CAPACITY 等临时容量问题
-const TEMPORARY_DISABLE_COOLDOWN_MINUTES: i64 = 10;
+const TEMPORARY_DISABLE_COOLDOWN_MINUTES: i64 = 1;
 /// 统计数据持久化防抖间隔
 const STATS_SAVE_DEBOUNCE: StdDuration = StdDuration::from_secs(30);
 
@@ -1339,8 +1339,51 @@ impl MultiTokenManager {
                 );
                 true
             } else {
-                tracing::error!("所有凭据均已禁用！");
-                false
+                // 所有凭据都被禁用，等待 2 秒后强制重试所有临时禁用的凭据
+                tracing::warn!("所有凭据均已禁用，等待 2 秒后强制重试...");
+                drop(current_id);
+                drop(entries);
+
+                std::thread::sleep(std::time::Duration::from_secs(2));
+
+                // 强制恢复所有临时禁用的凭据（忽略冷却时间）
+                let mut entries = self.entries.lock();
+                let mut recovered_count = 0;
+                for entry in entries.iter_mut() {
+                    if entry.disabled && entry.disabled_reason == Some(DisabledReason::TemporaryCapacityIssue) {
+                        entry.disabled = false;
+                        entry.disabled_reason = None;
+                        entry.disabled_at = None;
+                        entry.failure_count = 0;
+                        recovered_count += 1;
+                        tracing::info!("凭据 #{} 已强制恢复（兜底策略）", entry.id);
+                    }
+                }
+
+                if recovered_count > 0 {
+                    // 切换到优先级最高的可用凭据
+                    let mut current_id = self.current_id.lock();
+                    if let Some(next) = entries
+                        .iter()
+                        .filter(|e| !e.disabled)
+                        .min_by_key(|e| e.credentials.priority)
+                    {
+                        *current_id = next.id;
+                        tracing::info!(
+                            "已切换到凭据 #{}（优先级 {}），共恢复 {} 个凭据",
+                            next.id,
+                            next.credentials.priority,
+                            recovered_count
+                        );
+                        true
+                    } else {
+                        tracing::error!("强制恢复后仍无可用凭据！");
+                        false
+                    }
+                } else {
+                    tracing::error!("无临时禁用的凭据可恢复！");
+                    false
+                }
             }
         };
         self.save_stats_debounced();
