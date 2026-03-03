@@ -5,6 +5,11 @@
 # ============================================================
 set -euo pipefail
 
+# 加载环境变量（如果存在）
+if [ -f ~/.zshrc ]; then
+    source ~/.zshrc 2>/dev/null || true
+fi
+
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 RED='\033[0;31m'
@@ -21,7 +26,7 @@ SSH_PORT="${SSH_PORT:-10000}"
 SSH_USER="${SSH_USER:-root}"
 # SSH 和 Sudo 密码
 if [ -z "${SSH_PASS:-}" ]; then
-    err "错误: 请设置 SSH_PASS 环境变量"
+    err "错误: 请设置 SSH_PASS 环境变量（可添加到 ~/.zshrc）"
 fi
 SUDO_PASS="${SUDO_PASS:-$SSH_PASS}"
 COMPOSE_DIR="${COMPOSE_DIR:-/tmp/zfsv3/nvme12/18668588631/data/my_docker/kiro-rs}"
