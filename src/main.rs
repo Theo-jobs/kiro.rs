@@ -47,7 +47,7 @@ async fn warm_connections(
         }
 
         let url = "https://api.anthropic.com/v1/models";
-        match client.head(url).send().await {
+        match client.get(url).send().await {
             Ok(resp) => {
                 if resp.status().is_success() || resp.status().as_u16() == 401 {
                     // 401 也算成功，说明连接已建立
