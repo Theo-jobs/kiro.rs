@@ -588,8 +588,8 @@ impl KiroProvider {
                     status,
                     body
                 );
-                // 报告失败并触发切换到下一个凭据
-                self.token_manager.report_failure(ctx.id);
+                // 报告临时容量不足并触发切换到下一个凭据
+                self.token_manager.report_temporary_capacity_issue(ctx.id);
                 anyhow::bail!("{} API 请求失败: {} {}", api_type, status, body);
             }
 

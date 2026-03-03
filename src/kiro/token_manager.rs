@@ -403,6 +403,8 @@ struct CredentialEntry {
     disabled: bool,
     /// 禁用原因（用于区分手动禁用 vs 自动禁用，便于自愈）
     disabled_reason: Option<DisabledReason>,
+    /// 禁用时间（用于临时禁用的冷却计算）
+    disabled_at: Option<DateTime<Utc>>,
     /// API 调用成功次数
     success_count: u64,
     /// 最后一次 API 调用时间（RFC3339 格式）
@@ -418,6 +420,8 @@ enum DisabledReason {
     TooManyFailures,
     /// 额度已用尽（如 MONTHLY_REQUEST_COUNT）
     QuotaExceeded,
+    /// 临时容量不足（429 INSUFFICIENT_MODEL_CAPACITY）- 有冷却时间
+    TemporaryCapacityIssue,
 }
 
 /// 统计数据持久化条目
@@ -522,6 +526,10 @@ pub struct MultiTokenManager {
 
 /// 每个凭据最大 API 调用失败次数
 const MAX_FAILURES_PER_CREDENTIAL: u32 = 3;
+
+/// 临时禁用的冷却时间（分钟）
+/// 用于 429 INSUFFICIENT_MODEL_CAPACITY 等临时容量问题
+const TEMPORARY_DISABLE_COOLDOWN_MINUTES: i64 = 10;
 /// 统计数据持久化防抖间隔
 const STATS_SAVE_DEBOUNCE: StdDuration = StdDuration::from_secs(30);
 
@@ -591,6 +599,7 @@ impl MultiTokenManager {
                     } else {
                         None
                     },
+                    disabled_at: None,
                     success_count: 0,
                     last_used_at: None,
                 }
@@ -747,6 +756,9 @@ impl MultiTokenManager {
     /// # 参数
     /// - `model`: 可选的模型名称，用于过滤支持该模型的凭据（如 opus 模型需要付费订阅）
     pub async fn acquire_context(&self, model: Option<&str>) -> anyhow::Result<CallContext> {
+        // 自动恢复临时禁用的凭据（冷却时间已过）
+        self.auto_recover_temporary_disabled();
+
         let total = self.total_count();
         let mut tried_count = 0;
 
@@ -1142,6 +1154,36 @@ impl MultiTokenManager {
         self.save_stats_debounced();
     }
 
+    /// 自动恢复临时禁用的凭据
+    ///
+    /// 检查所有因临时问题（如容量不足）被禁用的凭据，
+    /// 如果冷却时间已过，自动恢复为可用状态
+    fn auto_recover_temporary_disabled(&self) {
+        let mut entries = self.entries.lock();
+        let now = Utc::now();
+        let cooldown = Duration::minutes(TEMPORARY_DISABLE_COOLDOWN_MINUTES);
+
+        for entry in entries.iter_mut() {
+            // 只处理临时禁用的凭据
+            if entry.disabled && entry.disabled_reason == Some(DisabledReason::TemporaryCapacityIssue) {
+                if let Some(disabled_at) = entry.disabled_at {
+                    // 检查是否已过冷却时间
+                    if now.signed_duration_since(disabled_at) >= cooldown {
+                        entry.disabled = false;
+                        entry.disabled_reason = None;
+                        entry.disabled_at = None;
+                        entry.failure_count = 0;
+                        tracing::info!(
+                            "凭据 #{} 冷却时间已过（{}分钟），自动恢复为可用状态",
+                            entry.id,
+                            TEMPORARY_DISABLE_COOLDOWN_MINUTES
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     /// 报告指定凭据 API 调用失败
     ///
     /// 增加失败计数，达到阈值时禁用凭据并切换到优先级最高的可用凭据
@@ -1225,6 +1267,63 @@ impl MultiTokenManager {
             entry.failure_count = MAX_FAILURES_PER_CREDENTIAL;
 
             tracing::error!("凭据 #{} 额度已用尽（MONTHLY_REQUEST_COUNT），已被禁用", id);
+
+            // 切换到优先级最高的可用凭据
+            if let Some(next) = entries
+                .iter()
+                .filter(|e| !e.disabled)
+                .min_by_key(|e| e.credentials.priority)
+            {
+                *current_id = next.id;
+                tracing::info!(
+                    "已切换到凭据 #{}（优先级 {}）",
+                    next.id,
+                    next.credentials.priority
+                );
+                true
+            } else {
+                tracing::error!("所有凭据均已禁用！");
+                false
+            }
+        };
+        self.save_stats_debounced();
+        result
+    }
+
+    /// 报告临时容量不足（429 INSUFFICIENT_MODEL_CAPACITY）
+    ///
+    /// 与 report_failure 不同，此方法会：
+    /// - 立即禁用凭据（不等待连续失败阈值）
+    /// - 标记为临时禁用（有冷却时间，会自动恢复）
+    /// - 切换到下一个可用凭据
+    ///
+    /// # Arguments
+    /// * `id` - 凭据 ID
+    pub fn report_temporary_capacity_issue(&self, id: u64) -> bool {
+        let result = {
+            let mut entries = self.entries.lock();
+            let mut current_id = self.current_id.lock();
+
+            let entry = match entries.iter_mut().find(|e| e.id == id) {
+                Some(e) => e,
+                None => return entries.iter().any(|e| !e.disabled),
+            };
+
+            if entry.disabled {
+                return entries.iter().any(|e| !e.disabled);
+            }
+
+            entry.disabled = true;
+            entry.disabled_reason = Some(DisabledReason::TemporaryCapacityIssue);
+            entry.disabled_at = Some(Utc::now());
+            entry.last_used_at = Some(Utc::now().to_rfc3339());
+            entry.failure_count += 1;
+
+            tracing::warn!(
+                "凭据 #{} 遇到临时容量不足（INSUFFICIENT_MODEL_CAPACITY），临时禁用 {} 分钟",
+                id,
+                TEMPORARY_DISABLE_COOLDOWN_MINUTES
+            );
 
             // 切换到优先级最高的可用凭据
             if let Some(next) = entries
@@ -1574,6 +1673,7 @@ impl MultiTokenManager {
                 failure_count: 0,
                 disabled: false,
                 disabled_reason: None,
+                disabled_at: None,
                 success_count: 0,
                 last_used_at: None,
             });
