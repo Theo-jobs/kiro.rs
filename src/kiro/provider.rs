@@ -580,7 +580,20 @@ impl KiroProvider {
                 continue;
             }
 
-            // 429/408/5xx - 瞬态上游错误：重试但不禁用或切换凭据
+            // 429 INSUFFICIENT_MODEL_CAPACITY - 容量不足：立即切换凭据
+            // 这种错误说明当前账户/区域容量已满，在同一凭据上重试无意义
+            if status.as_u16() == 429 && body.contains("INSUFFICIENT_MODEL_CAPACITY") {
+                tracing::warn!(
+                    "API 请求失败（模型容量不足，立即切换凭据）: {} {}",
+                    status,
+                    body
+                );
+                // 报告失败并触发切换到下一个凭据
+                self.token_manager.report_failure(ctx.id);
+                anyhow::bail!("{} API 请求失败: {} {}", api_type, status, body);
+            }
+
+            // 429/408/5xx - 其他瞬态上游错误：重试但不禁用或切换凭据
             // （避免 429 high traffic / 502 high load 等瞬态错误把所有凭据锁死）
             if matches!(status.as_u16(), 408 | 429) || status.is_server_error() {
                 tracing::warn!(
