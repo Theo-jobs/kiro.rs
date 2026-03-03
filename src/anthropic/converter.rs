@@ -255,7 +255,9 @@ pub fn convert_request(req: &MessagesRequest) -> Result<ConversionResult, Conver
     let chat_trigger_type = determine_chat_trigger_type(req);
 
     // 5. 处理最后一条消息作为 current_message（经过 prefill 预处理，末尾必为 user）
-    let last_message = messages.last().unwrap();
+    let last_message = messages.last().ok_or_else(|| {
+        ConversionError::EmptyMessages
+    })?;
     let (text_content, images, tool_results) = process_message_content(&last_message.content)?;
 
     // 6. 转换工具定义

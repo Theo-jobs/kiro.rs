@@ -390,7 +390,17 @@ async fn handle_stream_request(
         .header(header::CACHE_CONTROL, "no-cache")
         .header(header::CONNECTION, "keep-alive")
         .body(body)
-        .unwrap()
+        .map_err(|e| {
+            tracing::error!("构建 SSE 响应失败: {}", e);
+            e
+        })
+        .unwrap_or_else(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse::new("internal_error", "构建响应失败")),
+            )
+                .into_response()
+        })
 }
 
 /// Ping 事件间隔（25秒）
@@ -874,7 +884,17 @@ async fn handle_stream_request_buffered(
         .header(header::CACHE_CONTROL, "no-cache")
         .header(header::CONNECTION, "keep-alive")
         .body(Body::from_stream(stream))
-        .unwrap()
+        .map_err(|e| {
+            tracing::error!("构建缓冲 SSE 响应失败: {}", e);
+            e
+        })
+        .unwrap_or_else(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse::new("internal_error", "构建响应失败")),
+            )
+                .into_response()
+        })
 }
 
 /// 创建缓冲 SSE 事件流
@@ -987,7 +1007,17 @@ fn create_cached_stream_response(cached: CachedResponse) -> Response {
         .header(header::CACHE_CONTROL, "no-cache")
         .header(header::CONNECTION, "keep-alive")
         .body(Body::from_stream(stream))
-        .unwrap()
+        .map_err(|e| {
+            tracing::error!("构建缓存流响应失败: {}", e);
+            e
+        })
+        .unwrap_or_else(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse::new("internal_error", "构建响应失败")),
+            )
+                .into_response()
+        })
 }
 
 /// 创建带缓存的 SSE 事件流

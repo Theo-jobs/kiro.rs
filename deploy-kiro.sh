@@ -5,10 +5,10 @@
 # ============================================================
 set -euo pipefail
 
-# 加载环境变量（如果存在）
-if [ -f ~/.zshrc ]; then
-    source ~/.zshrc 2>/dev/null || true
-fi
+# 不再自动加载 .zshrc，避免卡住
+# 请在执行前手动 export 环境变量：
+# export SSH_PASS="cz.950427"
+# export SSH_USER="18668588631"
 
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
